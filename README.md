@@ -84,6 +84,20 @@ Confidence: 0.88
 Affect vector: [0.79, 0.00, 0.00, 0.62, 0.00]
 ```
 
+### Understanding the Affect Vector
+
+The **affect vector** is a five-number array representing the model’s estimate of how each relational emotion contributes to the overall tone of the input text:
+
+| Index | Dimension       | Meaning                                                     |
+| ----- | --------------- | ----------------------------------------------------------- |
+| 0     | **Hurt**        | Emotional pain or disappointment detected in the message.   |
+| 1     | **Trust**       | Degree of perceived confidence, empathy, or safety in tone. |
+| 2     | **Hope**        | Presence of optimism, expectation, or constructive framing. |
+| 3     | **Frustration** | Signs of irritation, blockage, or unmet desire.             |
+| 4     | **Curiosity**   | Indication of openness, inquiry, or cognitive engagement.   |
+
+Each value ranges from 0.0 to 1.0 and is derived by scaling sentiment confidence through the relational mapping in `config.toml`. Higher numbers indicate stronger expression of that emotional dimension.
+
 ---
 
 ## Configuration
