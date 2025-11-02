@@ -51,12 +51,8 @@ Requirements: `torch`, `transformers`, `pytest`, `tomli` (Python 3.11+).
 * Classes: negative, neutral, positive
 * Returns confidence-weighted label(s)
 
-```python
-from app.model import SentimentModel
-
-m = SentimentModel()
-print(m.predict("I love this!"))
-# → [{'label': 'positive', 'score': 0.98}]
+```bash
+python -m app.model_relational "I love this!"
 ```
 
 ---
@@ -76,14 +72,16 @@ configured relational weights, and returns a structured affect vector.
 
 Example:
 
-```python
-from app.model_relational import RelationalAffectModel
+```bash
+python -m app.model_relational "I’m disappointed you ignored me"
+```
 
-m = RelationalAffectModel()
-print(m.predict_relational("I’m disappointed you ignored me"))
-# → {'affect_vector': [0.79, 0.00, 0.00, 0.62, 0.00],
-#    'base_label': 'negative',
-#    'confidence': 0.88}
+Output:
+
+```
+Base label: negative
+Confidence: 0.88
+Affect vector: [0.79, 0.00, 0.00, 0.62, 0.00]
 ```
 
 ---
@@ -155,21 +153,56 @@ tests/test_model_relational.py::test_projection_weighting PASSED
 
 ---
 
-## Usage Summary
+## Quick Start: Try the Model
 
-**Command-line**
+You can test the model immediately after installation — no coding required.
 
-```bash
-python -m app.model_relational
+**Option 1: Single text input**
+
+Run this command from the project directory:
+
+```
+python -m app.model_relational "I’m excited about this project!"
 ```
 
-**Programmatic**
+The program loads the sentiment model, analyzes your text, and prints results like:
 
-```python
-from app.model_relational import RelationalAffectModel
-m = RelationalAffectModel()
-print(m.predict_relational("It works fine, nothing special."))
 ```
+Base label: positive
+Confidence: 0.94
+Affect vector: [0.00, 0.85, 0.74, 0.00, 0.55]
+```
+
+You can replace the quoted text with any sentence you want.
+The program exits automatically after displaying the result.
+
+---
+
+**Option 2: Run from a JSON file**
+
+1. Create a file named `input.json` containing an array of texts, for example:
+
+   ```json
+   ["I’m happy with how it went.", "This could have gone better.", "Maybe next time."]
+   ```
+
+2. Run:
+
+   ```
+   python -m app.model_relational input.json
+   ```
+
+3. The model will process each entry and display or save results in JSON format:
+
+   ```json
+   [
+     {"text": "I’m happy with how it went.", "label": "positive", "affect_vector": [0.00, 0.84, 0.70, 0.00, 0.50]},
+     {"text": "This could have gone better.", "label": "neutral", "affect_vector": [0.12, 0.08, 0.08, 0.12, 0.04]},
+     {"text": "Maybe next time.", "label": "neutral", "affect_vector": [0.15, 0.10, 0.10, 0.15, 0.05]}
+   ]
+   ```
+
+This allows you to analyze multiple sentences at once and keep the results for later use.
 
 ---
 
@@ -191,10 +224,3 @@ sentiment-analysis/
 ├── README.md
 └── pyproject.toml
 ```
-
----
-
-## License
-
-MIT License © 2025
-Use freely with attribution.
