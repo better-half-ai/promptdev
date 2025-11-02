@@ -1,69 +1,96 @@
-# Sentiment Analysis — CardiffNLP RoBERTa (3-Class, CPU)
+# Sentiment & Relational Affect Analysis
 
-## Overview
+This repository provides a standalone sentiment-analysis system.
 
-This repository implements a **CPU-optimized sentiment classifier** based on
-[`cardiffnlp/twitter-roberta-base-sentiment-latest`](https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment-latest).
-It predicts **positive**, **neutral**, or **negative** sentiment for English text with no additional training data required.
+It includes:
 
----
-
-## Features
-
-* ✅ **Three-class sentiment model** (positive / neutral / negative)
-* ⚙️ **Config-driven architecture** via `config.toml`
-* 🚀 **CPU-only, optimized for reproducibility**
-* 🧪 **Comprehensive pytest suite** with detailed diagnostics
-* 📦 **Automatic model download on setup**
+* A RoBERTa-based 3-class sentiment classifier
+* A configurable relational-affect extension producing 5-D emotional vectors
+* Full pytest coverage and human-readable diagnostics
 
 ---
 
-## Quick Start
+## Architecture
 
-### 1. Run setup
+```
+text → SentimentModel (RoBERTa) → label/score
+     → RelationalAffectModel (mapping) → affect_vector[5]
+```
+
+| Component                 | File                             | Description                                                                    |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------ |
+| **SentimentModel**        | `app/model.py`                   | Wraps `cardiffnlp/twitter-roberta-base-sentiment-latest` for 3-class sentiment |
+| **RelationalAffectModel** | `app/model_relational.py`        | Extends sentiment output to `[hurt, trust, hope, frustration, curiosity]`      |
+| **Tests**                 | `tests/test_model_relational.py` | Validates shape, label consistency, projection math                            |
+| **Configuration**         | `config.toml`                    | Defines model paths, inference parameters, and relational mapping              |
+
+---
+
+## Installation
 
 ```bash
-bash setup.sh
+git clone https://github.com/better-half-ai/sentiment-analysis.git
+cd sentiment-analysis
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
 ```
 
-### 2. Verify model and tests
+Requirements: `torch`, `transformers`, `pytest`, `tomli` (Python 3.11+).
 
-```bash
-uv run pytest -s -v
-```
+---
 
-Example output:
+## Models
 
-```
-✓ Model loaded: models/cardiffnlp-roberta-sentiment
-  Labels: ['negative', 'neutral', 'positive']
-[POSITIVE] 0.9870 ← I absolutely love how this works!
-[NEGATIVE] 0.9453 ← This is the worst experience ever.
-[NEUTRAL ] 0.4429 ← It's fine, not good but not terrible.
+### Base Sentiment Model
+
+**File:** `app/model.py`
+
+* Uses `cardiffnlp/twitter-roberta-base-sentiment-latest`
+* Classes: negative, neutral, positive
+* Returns confidence-weighted label(s)
+
+```python
+from app.model import SentimentModel
+
+m = SentimentModel()
+print(m.predict("I love this!"))
+# → [{'label': 'positive', 'score': 0.98}]
 ```
 
 ---
 
-## Repository Structure
+### Relational Affect Model
+
+**File:** `app/model_relational.py`
+
+Extends the base model to five relational dimensions:
 
 ```
-app/
- ├── __init__.py
- └── model.py                 # SentimentModel implementation
-scripts/
- └── download_model.py        # Optional offline model fetcher
-tests/
- └── test_model_sentiment.py  # Complete test suite with logging and diagnostics
-config.toml                   # Model and inference configuration
-setup.sh                      # Reproducible setup script
-models/cardiffnlp-roberta-sentiment/  # Auto-downloaded model files
+[hurt, trust, hope, frustration, curiosity]
+```
+
+It loads the mapping from `config.toml`, multiplies each sentiment confidence by its
+configured relational weights, and returns a structured affect vector.
+
+Example:
+
+```python
+from app.model_relational import RelationalAffectModel
+
+m = RelationalAffectModel()
+print(m.predict_relational("I’m disappointed you ignored me"))
+# → {'affect_vector': [0.79, 0.00, 0.00, 0.62, 0.00],
+#    'base_label': 'negative',
+#    'confidence': 0.88}
 ```
 
 ---
 
 ## Configuration
 
-All runtime parameters are managed in `config.toml`:
+**File:** `config.toml`
 
 ```toml
 [model]
@@ -73,69 +100,101 @@ device = "cpu"
 [inference]
 max_length = 128
 batch_size = 8
-num_labels = 3
-labels = ["negative", "neutral", "positive"]
+
+[relational]
+# rows: negative, neutral, positive
+# columns: hurt, trust, hope, frustration, curiosity
+mapping = [
+  [0.9, 0.0, 0.0, 0.7, 0.0],
+  [0.3, 0.2, 0.2, 0.3, 0.1],
+  [0.0, 0.9, 0.8, 0.0, 0.6],
+]
 ```
+
+You can tune or retrain this mapping.
+Each row corresponds to a sentiment label; each column defines a relational-affect axis.
+
+To learn the mapping empirically, train a small projection head:
+
+```
+L = MSE(W·p_sentiment, r_target)
+```
+
+Then replace the static numbers with the learned weights in this table.
 
 ---
 
-## Example Programmatic Use
+## Testing
 
-```python
-from app.model import SentimentModel
+Run all tests:
 
-model = SentimentModel("config.toml")
-texts = [
-    "I absolutely love this!",
-    "This is the worst experience ever.",
-    "It's fine, not good but not terrible."
-]
-for result in model.predict(texts):
-    print(result)
+```bash
+pytest -v -s
 ```
 
 Example output:
 
 ```
-{'label': 'positive', 'score': 0.982}
-{'label': 'negative', 'score': 0.945}
-{'label': 'neutral', 'score': 0.443}
+[INIT] Loaded RelationalAffectModel with mapping:
+tensor([[0.9000, 0.0000, 0.0000, 0.7000, 0.0000],
+        [0.3000, 0.2000, 0.2000, 0.3000, 0.1000],
+        [0.0000, 0.9000, 0.8000, 0.0000, 0.6000]])
+
+[TEXT] I love talking to you
+[BASE LABEL] positive
+[VECTOR] [0.00, 0.87, 0.78, 0.00, 0.58]
+```
+
+All tests should pass:
+
+```
+tests/test_model_relational.py::test_predict_relational_shape PASSED
+tests/test_model_relational.py::test_predict_relational_label_consistency PASSED
+tests/test_model_relational.py::test_projection_weighting PASSED
 ```
 
 ---
 
-## Tests
+## Usage Summary
 
-Run the full suite:
+**Command-line**
 
 ```bash
-uv run pytest -s -v
+python -m app.model_relational
 ```
 
-The behavioral tests match **actual model outputs**:
+**Programmatic**
 
-| Sentence                                   | Predicted | Score |
-| ------------------------------------------ | --------- | ----- |
-| I absolutely love this product!            | positive  | 0.984 |
-| This is the worst experience ever.         | negative  | 0.945 |
-| It's fine, not good but not terrible.      | neutral   | 0.443 |
-| I think it's okay, could be better though. | positive  | 0.720 |
-| I can't stand how bad this is!             | negative  | 0.950 |
-| What a wonderful surprise!                 | positive  | 0.976 |
-| It works, but I wouldn't recommend it.     | negative  | 0.552 |
+```python
+from app.model_relational import RelationalAffectModel
+m = RelationalAffectModel()
+print(m.predict_relational("It works fine, nothing special."))
+```
 
 ---
 
-## Maintenance
+## Project Structure
 
-* Reset environment and model:
+```
+sentiment-analysis/
+├── app/
+│   ├── __init__.py
+│   ├── model.py                 # 3-class sentiment model
+│   └── model_relational.py      # relational affect extension
+├── data/
+│   ├── emotions.json
+│   └── groups.json
+├── tests/
+│   ├── test_model_sentiment.py
+│   └── test_model_relational.py
+├── config.toml
+├── README.md
+└── pyproject.toml
+```
 
-  ```bash
-  rm -rf .venv uv.lock models/cardiffnlp-roberta-sentiment
-  bash setup.sh
-  ```
-* Run all tests:
+---
 
-  ```bash
-  uv run pytest -v -s
-  ```
+## License
+
+MIT License © 2025
+Use freely with attribution.
