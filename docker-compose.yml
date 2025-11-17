@@ -1,0 +1,51 @@
+networks:
+  promptdev-net:
+    driver: bridge
+
+volumes:
+  promptdev-pgdata:
+  promptdev-models:
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: promptdev-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-promptdev_user}
+      POSTGRES_PASSWORD: ${PROMPTDEV_USER_PASS}
+      POSTGRES_DB: ${POSTGRES_DB:-promptdev_db}
+    ports:
+      - "5434:5432"
+    volumes:
+      - promptdev-pgdata:/var/lib/postgresql/data
+    networks:
+      - promptdev-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-promptdev_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    container_name: promptdev-backend
+    environment:
+      MODE: standalone
+      CONFIG_PATH: /app/config.toml
+      PROMPTDEV_USER_PASS: ${PROMPTDEV_USER_PASS}
+      MISTRAL_URL: ${MISTRAL_URL:-http://host.docker.internal:8080}
+    volumes:
+      - ./src:/app/src
+      - ./config.toml:/app/config.toml
+      - ./migrations:/app/migrations
+    ports:
+      - "8001:8001"
+    networks:
+      - promptdev-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped

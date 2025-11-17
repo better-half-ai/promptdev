@@ -1,33 +1,42 @@
-# --- OS / Editor ---
-.DS_Store
-*.swp
-*.swo
-__pycache__/
-*.pyc
-
-# --- Python / Virtualenv ---
+# Environment secrets
 .env
-.venv/
-venv/
-env/
-pip-wheel-metadata/
-*.egg-info/
-dist/
-build/
+*.env
+!.env.example
 
-# --- Tooling ---
-.mypy_cache/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Testing
 .pytest_cache/
 .coverage
-coverage.xml
 htmlcov/
 
-# --- Logs / Runtime ---
+# Database
+*.sql
+pgdata/
+*.db
+
+# Docker
 *.log
-*.sqlite3
 
-# --- Local configs ---
-*.env.local
-.env.*
-!env.example
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+backup_*.sql

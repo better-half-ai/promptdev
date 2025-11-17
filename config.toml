@@ -1,0 +1,20 @@
+mode = "standalone"
+
+[mistral]
+url = "http://mistral:8080"
+
+[database]
+host = "postgres"
+port = 5432
+user = "promptdev_user"
+database = "promptdev_db"
+max_connections = 10
+
+[test_database]
+host = "localhost"
+port = 5434
+user = "promptdev_user"
+database = "promptdev_test"
+
+[security]
+paseto_public_key = ""
