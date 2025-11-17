@@ -1,0 +1,33 @@
+# --- OS / Editor ---
+.DS_Store
+*.swp
+*.swo
+__pycache__/
+*.pyc
+
+# --- Python / Virtualenv ---
+.env
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
+
+# --- Tooling ---
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Logs / Runtime ---
+*.log
+*.sqlite3
+
+# --- Local configs ---
+*.env.local
+.env.*
+!env.example
+
