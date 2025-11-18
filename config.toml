@@ -1,7 +1,7 @@
 mode = "standalone"
 
 [mistral]
-url = "http://mistral:8080"
+url = "http://host.docker.internal:8080"
 
 [database]
 host = "postgres"

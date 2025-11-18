@@ -5,6 +5,8 @@ help:
 	@echo ""
 	@echo "PromptDev Commands:"
 	@echo ""
+	@echo "  deploy            Full deployment (build, start, migrate)"
+	@echo "  rebuild           Rebuild containers with new dependencies"
 	@echo "  test              Run all tests"
 	@echo "  local-start       Start postgres and backend"
 	@echo "  local-mistral     Start Mistral locally (Mac)"
@@ -13,6 +15,13 @@ help:
 	@echo "  db-inspect        Show database tables"
 	@echo "  health            Check backend health"
 	@echo ""
+
+deploy: rebuild local-start db-migrate
+	@echo "✓ Deployment complete"
+
+rebuild:
+	docker compose build backend
+	uv sync
 
 test:
 	uv run pytest
@@ -50,4 +59,4 @@ clean:
 	find . -name "*.pyc" -delete 2>/dev/null || true
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-verbose local-start local-mistral local-stop db-migrate db-inspect db-shell health logs clean
+.PHONY: help deploy rebuild test test-verbose local-start local-mistral local-stop db-migrate db-inspect db-shell health logs clean

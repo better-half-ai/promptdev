@@ -10,10 +10,11 @@ dependencies = [
     "psycopg2-binary",
     "prometheus-client",
     "pytest",
-    "pytest-asyncio",
     "python-dotenv",
     "pydantic",
     "testcontainers[postgres]>=4.13.3",
+    "jinja2",
+    "pytest-asyncio",
 ]
 
 [build-system]
@@ -22,4 +23,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-asyncio_mode = "auto"
