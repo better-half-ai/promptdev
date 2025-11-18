@@ -7,8 +7,10 @@ help:
 	@echo ""
 	@echo "  test              Run all tests"
 	@echo "  local-start       Start postgres and backend"
+	@echo "  local-mistral     Start Mistral locally (Mac)"
 	@echo "  local-stop        Stop all services"
 	@echo "  db-migrate        Run database migrations"
+	@echo "  db-inspect        Show database tables"
 	@echo "  health            Check backend health"
 	@echo ""
 
@@ -21,11 +23,18 @@ test-verbose:
 local-start:
 	docker compose up -d postgres backend
 
+local-mistral:
+	bash scripts/run_mistral_local.sh
+
 local-stop:
 	docker compose down
 
 db-migrate:
-	docker compose exec backend uv run python -m scripts.migrate
+	docker compose exec backend uv run python scripts/migrate.py
+
+db-inspect:
+	@echo "=== Database Tables ==="
+	@docker compose exec backend uv run python -c "from scripts.inspect_db import list_tables; tables = list_tables(); print('\n'.join(tables))"
 
 db-shell:
 	docker compose exec postgres psql -U promptdev_user -d promptdev_db
@@ -41,4 +50,4 @@ clean:
 	find . -name "*.pyc" -delete 2>/dev/null || true
 
 .DEFAULT_GOAL := help
-.PHONY: help test test-verbose local-start local-stop db-migrate db-shell health logs clean
+.PHONY: help test test-verbose local-start local-mistral local-stop db-migrate db-inspect db-shell health logs clean

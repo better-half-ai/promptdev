@@ -293,7 +293,9 @@ dependencies = [
     { name = "httpx" },
     { name = "prometheus-client" },
     { name = "psycopg2-binary" },
+    { name = "pydantic" },
     { name = "pytest" },
+    { name = "python-dotenv" },
     { name = "testcontainers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -304,7 +306,9 @@ requires-dist = [
     { name = "httpx" },
     { name = "prometheus-client" },
     { name = "psycopg2-binary" },
+    { name = "pydantic" },
     { name = "pytest" },
+    { name = "python-dotenv" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.13.3" },
     { name = "uvicorn", extras = ["standard"] },
 ]

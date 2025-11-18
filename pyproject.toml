@@ -10,6 +10,8 @@ dependencies = [
     "psycopg2-binary",
     "prometheus-client",
     "pytest",
+    "python-dotenv",
+    "pydantic",
     "testcontainers[postgres]>=4.13.3",
 ]
 

@@ -11,5 +11,9 @@ RUN uv pip install --system .
 
 # Copy source
 COPY src ./src
+COPY db ./db
+COPY scripts ./scripts
+COPY migrations ./migrations
+COPY config.toml ./config.toml
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]

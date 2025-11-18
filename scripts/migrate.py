@@ -4,9 +4,9 @@ import sys
 from pathlib import Path
 import psycopg2
 
-# Add src to path for config access
+# Add project root to path for src imports
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 from src.config import get_config
 

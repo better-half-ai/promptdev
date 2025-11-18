@@ -1,4 +1,11 @@
-from src.db import get_conn, put_conn
+import sys
+from pathlib import Path
+
+# Add project root to path
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from db.db import get_conn, put_conn
 
 def list_tables():
     conn = get_conn()
