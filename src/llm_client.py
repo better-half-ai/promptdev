@@ -177,6 +177,10 @@ async def call_mistral(
             last_error = MistralError(f"HTTP error {e.response.status_code}: {e.response.text}")
             logger.warning(f"HTTP error attempt {attempt + 1}/{config.max_retries}: {e}")
             
+        except MistralResponseError:
+            # Don't retry on response parsing errors
+            raise
+            
         except Exception as e:
             last_error = MistralError(f"Unexpected error: {e}")
             logger.error(f"Unexpected error attempt {attempt + 1}/{config.max_retries}: {e}")
