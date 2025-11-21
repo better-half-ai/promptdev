@@ -7,6 +7,8 @@ Tests cover:
 - Admin/Template: CRUD, versioning, rollback
 - Admin/Monitoring: Users, conversations, memory, state
 - Admin/Interventions: Halt, resume, inject, list halted
+- Admin/Guardrails: CRUD, presets, chat with guardrails
+- Admin/Telemetry: Dashboard stats, user stats, aggregation
 - Integration: Full workflows, multi-user isolation
 """
 
@@ -77,6 +79,8 @@ def test_chat_basic(client, sample_template, mistral_available):
     data = response.json()
     assert "response" in data
     assert data["metadata"]["template_used"] == "test_chatbot"
+    assert "response_time_ms" in data["metadata"]
+    assert isinstance(data["metadata"]["response_time_ms"], int)
 
 
 def test_chat_without_template(client, sample_template, mistral_available):
@@ -335,6 +339,277 @@ def test_list_halted(client):
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUARDRAILS TESTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_create_guardrail_config(client):
+    """Test creating a guardrail configuration."""
+    response = client.post("/admin/guardrails", json={
+        "name": "test_config",
+        "rules": [
+            {
+                "type": "system_instruction",
+                "priority": 1,
+                "content": "Test instruction"
+            }
+        ],
+        "description": "Test config",
+        "created_by": "test"
+    })
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "test_config"
+    assert "id" in data
+
+
+def test_list_guardrail_configs(client):
+    """Test listing guardrail configurations."""
+    # Create a config first
+    client.post("/admin/guardrails", json={
+        "name": "list_test",
+        "rules": [{"type": "system_instruction", "content": "Test"}],
+        "created_by": "test"
+    })
+    
+    response = client.get("/admin/guardrails")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] >= 4  # 3 presets + our test config
+    assert any(c["name"] == "list_test" for c in data["configs"])
+
+
+def test_list_guardrail_configs_with_inactive(client):
+    """Test listing configs including inactive ones."""
+    response = client.get("/admin/guardrails?include_inactive=true")
+    
+    assert response.status_code == 200
+    # Should return configs regardless of is_active status
+
+
+def test_list_preset_configs(client):
+    """Test listing preset configurations."""
+    response = client.get("/admin/guardrails/presets")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "presets" in data
+    assert "unrestricted" in data["presets"]
+    assert "research_safe" in data["presets"]
+    assert "clinical" in data["presets"]
+
+
+def test_get_guardrail_by_name(client):
+    """Test getting a specific guardrail by name."""
+    # Test with preset
+    response = client.get("/admin/guardrails/unrestricted")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "unrestricted"
+    assert "rules" in data
+    assert len(data["rules"]) > 0
+
+
+def test_get_guardrail_by_id(client):
+    """Test getting a specific guardrail by ID."""
+    # Create a config
+    create_response = client.post("/admin/guardrails", json={
+        "name": "id_test",
+        "rules": [{"type": "system_instruction", "content": "Test"}],
+        "created_by": "test"
+    })
+    config_id = create_response.json()["id"]
+    
+    # Get by ID
+    response = client.get(f"/admin/guardrails/id/{config_id}")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == config_id
+    assert data["name"] == "id_test"
+
+
+def test_update_guardrail_config(client):
+    """Test updating a guardrail configuration."""
+    # Create a config
+    create_response = client.post("/admin/guardrails", json={
+        "name": "update_test",
+        "rules": [{"type": "system_instruction", "content": "Original"}],
+        "created_by": "test"
+    })
+    config_id = create_response.json()["id"]
+    
+    # Update it
+    response = client.put(f"/admin/guardrails/{config_id}", json={
+        "description": "Updated description",
+        "is_active": False
+    })
+    
+    assert response.status_code == 200
+    assert "updated" in response.json()["message"].lower()
+
+
+def test_delete_guardrail_soft(client):
+    """Test soft deleting (deactivating) a guardrail."""
+    # Create a config
+    create_response = client.post("/admin/guardrails", json={
+        "name": "delete_soft_test",
+        "rules": [{"type": "system_instruction", "content": "Test"}],
+        "created_by": "test"
+    })
+    config_id = create_response.json()["id"]
+    
+    # Soft delete
+    response = client.delete(f"/admin/guardrails/{config_id}?soft=true")
+    
+    assert response.status_code == 200
+    assert "deactivated" in response.json()["message"].lower()
+
+
+def test_delete_guardrail_hard(client):
+    """Test hard deleting a guardrail."""
+    # Create a config
+    create_response = client.post("/admin/guardrails", json={
+        "name": "delete_hard_test",
+        "rules": [{"type": "system_instruction", "content": "Test"}],
+        "created_by": "test"
+    })
+    config_id = create_response.json()["id"]
+    
+    # Hard delete
+    response = client.delete(f"/admin/guardrails/{config_id}?soft=false")
+    
+    assert response.status_code == 200
+    assert "deleted" in response.json()["message"].lower()
+    
+    # Verify it's gone
+    get_response = client.get(f"/admin/guardrails/id/{config_id}")
+    assert get_response.status_code == 404
+
+
+def test_chat_with_guardrail_config(client, sample_template, mistral_available):
+    """Test chat with guardrail configuration applied."""
+    if not mistral_available:
+        pytest.skip("Mistral not available")
+    
+    response = client.post("/chat", json={
+        "user_id": "user1",
+        "message": "Hello",
+        "template_name": "test_chatbot",
+        "guardrail_config": "unrestricted"
+    })
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "response" in data
+
+
+def test_chat_with_nonexistent_guardrail(client, sample_template):
+    """Test chat with invalid guardrail config."""
+    response = client.post("/chat", json={
+        "user_id": "user1",
+        "message": "Hello",
+        "template_name": "test_chatbot",
+        "guardrail_config": "nonexistent"
+    })
+    
+    # Should fail during context building
+    assert response.status_code == 500
+
+
+def test_create_guardrail_with_invalid_rules(client):
+    """Test creating guardrail with invalid rules structure."""
+    response = client.post("/admin/guardrails", json={
+        "name": "invalid_rules",
+        "rules": [
+            {"missing_type_field": "value"}  # Invalid - no 'type'
+        ],
+        "created_by": "test"
+    })
+    
+    assert response.status_code == 400
+
+
+def test_get_nonexistent_guardrail(client):
+    """Test getting a guardrail that doesn't exist."""
+    response = client.get("/admin/guardrails/nonexistent_config")
+    
+    assert response.status_code == 404
+
+
+def test_update_nonexistent_guardrail(client):
+    """Test updating a guardrail that doesn't exist."""
+    response = client.put("/admin/guardrails/99999", json={
+        "description": "Updated"
+    })
+    
+    assert response.status_code == 404
+
+
+def test_delete_nonexistent_guardrail(client):
+    """Test deleting a guardrail that doesn't exist."""
+    response = client.delete("/admin/guardrails/99999")
+    
+    assert response.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TELEMETRY & STATS TESTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_get_stats_overview(client):
+    """Test getting dashboard statistics overview."""
+    response = client.get("/admin/stats/overview")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "active_users_today" in data
+    assert "active_users_hour" in data
+    assert "total_messages_today" in data
+    assert "messages_per_hour" in data
+    assert "avg_response_time_ms" in data
+    assert "error_rate_percent" in data
+    assert "top_templates" in data
+
+
+def test_get_user_statistics(client, sample_template, mistral_available):
+    """Test getting statistics for a specific user."""
+    if not mistral_available:
+        pytest.skip("Mistral not available")
+    
+    # Generate some activity
+    client.post("/chat", json={
+        "user_id": "stats_user",
+        "message": "Test message",
+        "template_name": "test_chatbot"
+    })
+    
+    response = client.get("/admin/stats/users/stats_user")
+    
+    assert response.status_code == 200
+    # Stats structure depends on telemetry module implementation
+
+
+def test_get_user_statistics_not_found(client):
+    """Test getting statistics for user with no activity."""
+    response = client.get("/admin/stats/users/nonexistent_user")
+    
+    assert response.status_code == 404
+
+
+def test_trigger_aggregation(client):
+    """Test manually triggering metric aggregation."""
+    response = client.post("/admin/stats/aggregate")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "message" in data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
