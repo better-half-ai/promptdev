@@ -3,6 +3,9 @@ mode = "standalone"
 [mistral]
 url = "http://host.docker.internal:8080"
 
+[test_mistral]
+url = "http://127.0.0.1:8080"
+
 [database]
 host = "postgres"
 port = 5432

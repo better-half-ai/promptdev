@@ -26,7 +26,7 @@ Example:
 import logging
 from typing import Optional, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import json
 
 from db.db import get_conn, put_conn
@@ -66,8 +66,7 @@ class ConversationMessage(BaseModel):
     content: str
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserMemory(BaseModel):
@@ -79,8 +78,7 @@ class UserMemory(BaseModel):
     value: dict[str, Any]  # JSONB stored as dict
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserState(BaseModel):
@@ -90,8 +88,7 @@ class UserState(BaseModel):
     mode: str = Field(..., min_length=1)
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -154,57 +151,51 @@ def get_conversation_history(
     """
     Get conversation history for a user.
     
+    Returns messages in reverse chronological order (newest first).
+    
     Args:
         user_id: User identifier
-        limit: Maximum number of messages to return (None = all)
-        offset: Number of messages to skip (for pagination)
+        limit: Maximum number of messages to return
+        offset: Number of messages to skip
     
     Returns:
-        List of messages (newest first)
+        List of ConversationMessage objects (newest first)
     
     Example:
         >>> # Get last 10 messages
         >>> history = get_conversation_history("user123", limit=10)
-        >>> for msg in history:
-        ...     print(f"{msg.role}: {msg.content}")
     """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            if limit is not None:
-                cur.execute(
-                    """
-                    SELECT id, user_id, role, content, created_at
-                    FROM conversation_history
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (user_id, limit, offset)
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT id, user_id, role, content, created_at
-                    FROM conversation_history
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
-                    OFFSET %s
-                    """,
-                    (user_id, offset)
-                )
+            query = """
+                SELECT id, user_id, role, content, created_at
+                FROM conversation_history
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            """
+            params = [user_id]
             
-            rows = cur.fetchall()
-            return [
-                ConversationMessage(
+            if limit is not None:
+                query += " LIMIT %s"
+                params.append(limit)
+            
+            if offset > 0:
+                query += " OFFSET %s"
+                params.append(offset)
+            
+            cur.execute(query, params)
+            
+            messages = []
+            for row in cur.fetchall():
+                messages.append(ConversationMessage(
                     id=row[0],
                     user_id=row[1],
                     role=row[2],
                     content=row[3],
                     created_at=row[4]
-                )
-                for row in rows
-            ]
+                ))
+            return messages
     finally:
         put_conn(conn)
 
@@ -216,27 +207,51 @@ def get_recent_messages(
     """
     Get recent messages in chronological order (oldest first).
     
-    Convenience function for building context - returns messages
-    in the order they should appear in prompts.
+    This is for building prompts where you need chronological order.
     
     Args:
         user_id: User identifier
         count: Number of recent messages to retrieve
     
     Returns:
-        List of messages (oldest first, ready for prompt)
+        List of ConversationMessage objects (oldest first)
     
     Example:
-        >>> msgs = get_recent_messages("user123", count=5)
-        >>> # [oldest, ..., newest] - ready to append to prompt
+        >>> # Get last 10 messages for prompt context
+        >>> history = get_recent_messages("user123", count=10)
     """
-    messages = get_conversation_history(user_id, limit=count)
-    return list(reversed(messages))  # Reverse to get oldest first
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, role, content, created_at
+                FROM conversation_history
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, count)
+            )
+            
+            messages = []
+            for row in cur.fetchall():
+                messages.append(ConversationMessage(
+                    id=row[0],
+                    user_id=row[1],
+                    role=row[2],
+                    content=row[3],
+                    created_at=row[4]
+                ))
+            # Reverse to get chronological order (oldest first)
+            return list(reversed(messages))
+    finally:
+        put_conn(conn)
 
 
 def count_messages(user_id: str) -> int:
     """
-    Count total messages for a user.
+    Count messages for a user.
     
     Args:
         user_id: User identifier
@@ -522,19 +537,13 @@ def clear_all_memory(user_id: str) -> int:
 # USER STATE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def set_user_state(
-    user_id: str,
-    mode: str
-) -> None:
+def set_user_state(user_id: str, mode: str) -> None:
     """
-    Set or update user state.
+    Set user state (upserts).
     
     Args:
         user_id: User identifier
-        mode: State mode (e.g., 'active', 'paused', 'completed')
-    
-    Raises:
-        MemoryError: If database operation fails
+        mode: State mode string
     
     Example:
         >>> set_user_state("user123", "active")
@@ -546,7 +555,7 @@ def set_user_state(
                 """
                 INSERT INTO user_state (user_id, mode)
                 VALUES (%s, %s)
-                ON CONFLICT (user_id)
+                ON CONFLICT (user_id) 
                 DO UPDATE SET mode = EXCLUDED.mode, updated_at = NOW()
                 """,
                 (user_id, mode)
@@ -555,7 +564,7 @@ def set_user_state(
             logger.debug(f"Set state '{mode}' for user {user_id}")
     except Exception as e:
         conn.rollback()
-        raise MemoryError(f"Failed to set user state: {e}")
+        raise MemoryError(f"Failed to set state: {e}")
     finally:
         put_conn(conn)
 
@@ -572,8 +581,8 @@ def get_user_state(user_id: str) -> Optional[UserState]:
     
     Example:
         >>> state = get_user_state("user123")
-        >>> if state:
-        ...     print(f"User is in {state.mode} mode")
+        >>> if state and state.mode == "active":
+        ...     print("User is active")
     """
     conn = get_conn()
     try:
@@ -583,13 +592,13 @@ def get_user_state(user_id: str) -> Optional[UserState]:
                 (user_id,)
             )
             row = cur.fetchone()
-            if row:
-                return UserState(
-                    user_id=row[0],
-                    mode=row[1],
-                    updated_at=row[2]
-                )
-            return None
+            if not row:
+                return None
+            return UserState(
+                user_id=row[0],
+                mode=row[1],
+                updated_at=row[2]
+            )
     finally:
         put_conn(conn)
 
@@ -613,13 +622,13 @@ def delete_user_state(user_id: str) -> None:
                 (user_id,)
             )
             if cur.rowcount == 0:
-                raise MemoryNotFoundError(f"State not found for user {user_id}")
+                raise MemoryNotFoundError(f"State for user {user_id} not found")
             conn.commit()
             logger.debug(f"Deleted state for user {user_id}")
     except MemoryNotFoundError:
         raise
     except Exception as e:
         conn.rollback()
-        raise MemoryError(f"Failed to delete user state: {e}")
+        raise MemoryError(f"Failed to delete state: {e}")
     finally:
         put_conn(conn)

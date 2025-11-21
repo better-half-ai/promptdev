@@ -26,6 +26,10 @@ class MistralConfig(BaseModel):
     url: str
 
 
+class TestMistralConfig(BaseModel):
+    url: str
+
+
 class DatabaseConfig(BaseModel):
     host: str
     port: int
@@ -49,6 +53,7 @@ class Config(BaseModel):
     mistral: MistralConfig
     database: DatabaseConfig
     test_database: TestDatabaseConfig | None = None
+    test_mistral: TestMistralConfig | None = None
     security: SecurityConfig
 
 

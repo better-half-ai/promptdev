@@ -6,6 +6,7 @@ Handles all communication with the self-hosted Mistral LLM server via llama.cpp'
 structured response parsing.
 """
 
+import os
 import httpx
 import logging
 from typing import Optional
@@ -80,8 +81,15 @@ class ClientConfig:
 def get_client_config() -> ClientConfig:
     """Load client configuration from application config."""
     cfg = get_config()
+    
+    # Use test_mistral if in test mode
+    if os.environ.get("USE_TEST_DB") == "1" and cfg.test_mistral:
+        base_url = cfg.test_mistral.url
+    else:
+        base_url = cfg.mistral.url
+    
     return ClientConfig(
-        base_url=cfg.mistral.url,
+        base_url=base_url,
         timeout_seconds=30.0,  # Could be added to config.toml if needed
         max_retries=3,
         retry_delay=1.0

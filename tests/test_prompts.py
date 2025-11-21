@@ -42,83 +42,13 @@ from src.prompts import (
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # FIXTURES
-# ═══════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture(scope="session")
-def migrations_dir():
-    """Get migrations directory."""
-    root = Path(__file__).resolve().parent.parent
-    return root / "migrations"
-
-
-@pytest.fixture(scope="session")
-def test_db(postgres_container, migrations_dir):
-    """Setup test database with migrations."""
-    # Run migrations
-    conn = psycopg2.connect(
-        host=os.environ["TEST_DB_HOST"],
-        port=int(os.environ["TEST_DB_PORT"]),
-        user=os.environ["TEST_DB_USER"],
-        password=os.environ["TEST_DB_PASSWORD"],
-        database=os.environ["TEST_DB_NAME"],
-    )
-    
-    # Run base migration (001_init.sql)
-    migration_file = migrations_dir / "001_init.sql"
-    if migration_file.exists():
-        with migration_file.open("r") as f:
-            with conn.cursor() as cur:
-                cur.execute(f.read())
-        conn.commit()
-    
-    # Run prompts schema migration (002_prompts_schema.sql)
-    prompts_migration = migrations_dir / "002_prompts_schema.sql"
-    if prompts_migration.exists():
-        with prompts_migration.open("r") as f:
-            with conn.cursor() as cur:
-                cur.execute(f.read())
-        conn.commit()
-    
-    conn.close()
-    yield
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 @pytest.fixture
-def db_connection(test_db, postgres_container):
-    """Provide a test database connection and patch prompts module."""
-    import src.prompts as prompts_module
-    
-    # Create real connection to test DB
-    def mock_get_conn():
-        return psycopg2.connect(
-            host=os.environ["TEST_DB_HOST"],
-            port=int(os.environ["TEST_DB_PORT"]),
-            user=os.environ["TEST_DB_USER"],
-            password=os.environ["TEST_DB_PASSWORD"],
-            database=os.environ["TEST_DB_NAME"],
-        )
-    
-    def mock_put_conn(conn):
-        conn.close()
-    
-    # Patch where the functions are USED (in prompts module), not where they're defined
-    with patch.object(prompts_module, 'get_conn', mock_get_conn):
-        with patch.object(prompts_module, 'put_conn', mock_put_conn):
-            yield
-            
-            # Cleanup: truncate tables between tests
-            conn = mock_get_conn()
-            with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE prompt_version_history CASCADE")
-                cur.execute("TRUNCATE TABLE system_prompt RESTART IDENTITY CASCADE")
-            conn.commit()
-            conn.close()
-
-
-@pytest.fixture
-def simple_template(db_connection):
+def simple_template(db_module):
     """Create a simple template for testing."""
     template_id = create_template(
         "test_simple",
@@ -130,7 +60,7 @@ def simple_template(db_connection):
 
 
 @pytest.fixture
-def complex_template(db_connection):
+def complex_template(db_module):
     """Create a complex template with loops and conditionals."""
     content = """
 You are {{role}}.
@@ -145,7 +75,7 @@ Tasks:
 {% endfor %}
 
 {% if urgent %}
-⚠️ URGENT: Complete within {{deadline}}
+âš ï¸ URGENT: Complete within {{deadline}}
 {% endif %}
     """.strip()
     
@@ -157,11 +87,11 @@ Tasks:
     yield template_id
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # CRUD TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_create_simple_template(db_connection):
+def test_create_simple_template(db_module):
     """Test creating a simple template."""
     template_id = create_template(
         "greeting",
@@ -180,7 +110,7 @@ def test_create_simple_template(db_connection):
     assert template.is_active is True
 
 
-def test_create_template_with_loops(db_connection):
+def test_create_template_with_loops(db_module):
     """Test creating template with Jinja2 loops."""
     content = """
 {% for item in items %}
@@ -194,7 +124,7 @@ def test_create_template_with_loops(db_connection):
     assert "{% for item in items %}" in template.content
 
 
-def test_create_template_with_conditionals(db_connection):
+def test_create_template_with_conditionals(db_module):
     """Test creating template with Jinja2 conditionals."""
     content = """
 {% if urgent %}
@@ -210,7 +140,7 @@ URGENT: {{message}}
     assert "{% if urgent %}" in template.content
 
 
-def test_create_template_invalid_syntax(db_connection):
+def test_create_template_invalid_syntax(db_module):
     """Test that invalid Jinja2 syntax raises error."""
     with pytest.raises(TemplateSyntaxError) as exc_info:
         create_template("bad_template", "{{name")
@@ -230,7 +160,7 @@ def test_get_template(simple_template):
     assert isinstance(template.updated_at, datetime)
 
 
-def test_get_template_not_found(db_connection):
+def test_get_template_not_found(db_module):
     """Test that fetching nonexistent template raises error."""
     with pytest.raises(TemplateNotFoundError) as exc_info:
         get_template(99999)
@@ -246,7 +176,7 @@ def test_get_template_by_name(simple_template):
     assert template.name == "test_simple"
 
 
-def test_get_template_by_name_not_found(db_connection):
+def test_get_template_by_name_not_found(db_module):
     """Test that fetching by nonexistent name raises error."""
     with pytest.raises(TemplateNotFoundError):
         get_template_by_name("nonexistent")
@@ -306,7 +236,7 @@ def test_update_template_invalid_syntax(simple_template):
         update_template(simple_template, "{{broken")
 
 
-def test_update_template_not_found(db_connection):
+def test_update_template_not_found(db_module):
     """Test updating nonexistent template raises error."""
     with pytest.raises(TemplateNotFoundError):
         update_template(99999, "content")
@@ -333,7 +263,7 @@ def test_deactivate_template(simple_template):
     assert template.is_active is False
 
 
-def test_deactivate_nonexistent_template(db_connection):
+def test_deactivate_nonexistent_template(db_module):
     """Test deactivating nonexistent template raises error."""
     with pytest.raises(TemplateNotFoundError):
         deactivate_template(99999)
@@ -348,15 +278,15 @@ def test_activate_template(simple_template):
     assert template.is_active is True
 
 
-def test_activate_nonexistent_template(db_connection):
+def test_activate_nonexistent_template(db_module):
     """Test activating nonexistent template raises error."""
     with pytest.raises(TemplateNotFoundError):
         activate_template(99999)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # VERSION MANAGEMENT TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def test_get_version_history(simple_template):
     """Test retrieving version history."""
@@ -371,7 +301,7 @@ def test_get_version_history(simple_template):
     assert versions[2].version == 1
 
 
-def test_get_version_history_not_found(db_connection):
+def test_get_version_history_not_found(db_module):
     """Test version history for nonexistent template raises error."""
     with pytest.raises(TemplateNotFoundError):
         get_version_history(99999)
@@ -449,9 +379,9 @@ def test_version_metadata(simple_template):
     assert isinstance(v2.created_at, datetime)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # RENDERING TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def test_render_simple_template(simple_template):
     """Test rendering a simple template."""
@@ -459,7 +389,7 @@ def test_render_simple_template(simple_template):
     assert result == "Hello World!"
 
 
-def test_render_with_multiple_variables(db_connection):
+def test_render_with_multiple_variables(db_module):
     """Test rendering with multiple variables."""
     template_id = create_template(
         "multi_var",
@@ -500,7 +430,7 @@ def test_render_with_conditionals(complex_template):
     })
     
     assert "Context: Important project" in result
-    assert "⚠️ URGENT" in result
+    assert "âš ï¸ URGENT" in result
     assert "5pm" in result
 
 
@@ -513,10 +443,10 @@ def test_render_conditional_false(complex_template):
         "urgent": False
     })
     
-    assert "⚠️ URGENT" not in result
+    assert "âš ï¸ URGENT" not in result
 
 
-def test_render_missing_variable(db_connection):
+def test_render_missing_variable(db_module):
     """Test that missing required variable raises error."""
     template_id = create_template("missing_var", "Hello {{name}}!")
     
@@ -526,7 +456,7 @@ def test_render_missing_variable(db_connection):
     assert "name" in str(exc_info.value).lower()
 
 
-def test_render_by_name(db_connection):
+def test_render_by_name(db_module):
     """Test rendering by template name."""
     create_template("by_name", "Hello {{name}}!")
     
@@ -534,13 +464,13 @@ def test_render_by_name(db_connection):
     assert result == "Hello World!"
 
 
-def test_render_by_name_not_found(db_connection):
+def test_render_by_name_not_found(db_module):
     """Test rendering nonexistent template by name raises error."""
     with pytest.raises(TemplateNotFoundError):
         render_template_by_name("nonexistent", {})
 
 
-def test_render_with_filters(db_connection):
+def test_render_with_filters(db_module):
     """Test rendering with Jinja2 filters."""
     template_id = create_template(
         "with_filters",
@@ -551,54 +481,54 @@ def test_render_with_filters(db_connection):
     assert result == "ALICE is 30 years old"
 
 
-def test_render_empty_variables(db_connection):
+def test_render_empty_variables(db_module):
     """Test rendering with empty variables dict."""
     template_id = create_template("no_vars", "Static content")
     result = render_template(template_id, {})
     assert result == "Static content"
 
 
-def test_render_no_variables_arg(db_connection):
+def test_render_no_variables_arg(db_module):
     """Test rendering without providing variables argument."""
     template_id = create_template("no_vars2", "Static content")
     result = render_template(template_id)
     assert result == "Static content"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # EDGE CASES & ERROR CONDITIONS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_create_template_empty_name(db_connection):
+def test_create_template_empty_name(db_module):
     """Test that empty name raises validation error."""
     with pytest.raises(Exception):  # Pydantic validation error
         create_template("", "content")
 
 
-def test_create_template_empty_content(db_connection):
+def test_create_template_empty_content(db_module):
     """Test creating template with empty content."""
     template_id = create_template("empty_content", "")
     template = get_template(template_id)
     assert template.content == ""
 
 
-def test_template_with_unicode(db_connection):
+def test_template_with_unicode(db_module):
     """Test template with Unicode characters."""
     template_id = create_template(
         "unicode_test",
-        "Hello {{name}}! 你好 {{chinese_name}}! 🎉"
+        "Hello {{name}}! ä½ å¥½ {{chinese_name}}! ðŸŽ‰"
     )
     
     result = render_template(template_id, {
         "name": "World",
-        "chinese_name": "世界"
+        "chinese_name": "ä¸–ç•Œ"
     })
     
-    assert "你好 世界!" in result
-    assert "🎉" in result
+    assert "ä½ å¥½ ä¸–ç•Œ!" in result
+    assert "ðŸŽ‰" in result
 
 
-def test_template_with_html(db_connection):
+def test_template_with_html(db_module):
     """Test template with HTML content."""
     template_id = create_template(
         "html_template",
@@ -613,7 +543,7 @@ def test_template_with_html(db_connection):
     assert "<h1>Test</h1>" in result
 
 
-def test_large_template(db_connection):
+def test_large_template(db_module):
     """Test creating and rendering a large template."""
     # Create 1000-line template
     # Need quadruple braces in f-string to get double braces in output
@@ -630,7 +560,7 @@ def test_large_template(db_connection):
     assert "Value 999" in result
 
 
-def test_template_with_nested_loops(db_connection):
+def test_template_with_nested_loops(db_module):
     """Test template with nested loops."""
     # Use bracket notation to avoid conflict with dict.items() method
     content = """
@@ -657,7 +587,7 @@ Category: {{category['name']}}
     assert "Carrot" in result
 
 
-def test_template_whitespace_control(db_connection):
+def test_template_whitespace_control(db_module):
     """Test Jinja2 whitespace control."""
     content = """
 {%- for item in items %}
@@ -686,7 +616,7 @@ def test_concurrent_updates(simple_template):
     assert len(versions) == 4
 
 
-def test_template_with_macros(db_connection):
+def test_template_with_macros(db_module):
     """Test template with Jinja2 macros."""
     content = """
 {% macro greeting(name) %}
@@ -702,7 +632,7 @@ Hello {{name}}!
     assert "Hello Alice!" in result
 
 
-def test_template_inheritance(db_connection):
+def test_template_inheritance(db_module):
     """Test that template doesn't support extends (sandboxed)."""
     # Jinja2 sandbox doesn't support template inheritance
     template_id = create_template(

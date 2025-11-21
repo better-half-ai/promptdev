@@ -46,79 +46,11 @@ from src.memory import (
     InvalidRoleError,
 )
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# FIXTURES
-# ═══════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture(scope="session")
-def migrations_dir():
-    """Get migrations directory."""
-    root = Path(__file__).resolve().parent.parent
-    return root / "migrations"
-
-
-@pytest.fixture(scope="session")
-def test_db(postgres_container, migrations_dir):
-    """Setup test database with migrations."""
-    conn = psycopg2.connect(
-        host=os.environ["TEST_DB_HOST"],
-        port=int(os.environ["TEST_DB_PORT"]),
-        user=os.environ["TEST_DB_USER"],
-        password=os.environ["TEST_DB_PASSWORD"],
-        database=os.environ["TEST_DB_NAME"],
-    )
-    
-    # Run migrations
-    migration_file = migrations_dir / "001_init.sql"
-    if migration_file.exists():
-        with migration_file.open("r") as f:
-            with conn.cursor() as cur:
-                cur.execute(f.read())
-        conn.commit()
-    
-    conn.close()
-    yield
-
-
-@pytest.fixture
-def db_connection(test_db, postgres_container):
-    """Provide a test database connection and patch memory module."""
-    import src.memory as memory_module
-    
-    # Create real connection to test DB
-    def mock_get_conn():
-        return psycopg2.connect(
-            host=os.environ["TEST_DB_HOST"],
-            port=int(os.environ["TEST_DB_PORT"]),
-            user=os.environ["TEST_DB_USER"],
-            password=os.environ["TEST_DB_PASSWORD"],
-            database=os.environ["TEST_DB_NAME"],
-        )
-    
-    def mock_put_conn(conn):
-        conn.close()
-    
-    # Patch where the functions are USED (in memory module)
-    with patch.object(memory_module, 'get_conn', mock_get_conn):
-        with patch.object(memory_module, 'put_conn', mock_put_conn):
-            yield
-            
-            # Cleanup: truncate tables between tests
-            conn = mock_get_conn()
-            with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE conversation_history CASCADE")
-                cur.execute("TRUNCATE TABLE user_memory CASCADE")
-                cur.execute("TRUNCATE TABLE user_state CASCADE")
-            conn.commit()
-            conn.close()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # CONVERSATION HISTORY TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_add_message_user(db_connection):
+def test_add_message_user(db_module):
     """Test adding a user message."""
     msg_id = add_message("user1", "user", "Hello!")
     
@@ -126,7 +58,7 @@ def test_add_message_user(db_connection):
     assert msg_id > 0
 
 
-def test_add_message_assistant(db_connection):
+def test_add_message_assistant(db_module):
     """Test adding an assistant message."""
     msg_id = add_message("user1", "assistant", "Hi there!")
     
@@ -134,7 +66,7 @@ def test_add_message_assistant(db_connection):
     assert msg_id > 0
 
 
-def test_add_message_invalid_role(db_connection):
+def test_add_message_invalid_role(db_module):
     """Test that invalid role raises error."""
     with pytest.raises(InvalidRoleError) as exc_info:
         add_message("user1", "system", "Invalid")
@@ -142,13 +74,13 @@ def test_add_message_invalid_role(db_connection):
     assert "must be 'user' or 'assistant'" in str(exc_info.value)
 
 
-def test_add_message_invalid_role_empty(db_connection):
+def test_add_message_invalid_role_empty(db_module):
     """Test that empty role raises error."""
     with pytest.raises(InvalidRoleError):
         add_message("user1", "", "Invalid")
 
 
-def test_get_conversation_history(db_connection):
+def test_get_conversation_history(db_module):
     """Test retrieving conversation history."""
     # Add messages
     add_message("user1", "user", "Hello")
@@ -168,7 +100,7 @@ def test_get_conversation_history(db_connection):
     assert history[2].role == "user"
 
 
-def test_get_conversation_history_with_limit(db_connection):
+def test_get_conversation_history_with_limit(db_module):
     """Test retrieving conversation history with limit."""
     # Add 5 messages
     for i in range(5):
@@ -182,7 +114,7 @@ def test_get_conversation_history_with_limit(db_connection):
     assert history[1].content == "Message 3"
 
 
-def test_get_conversation_history_with_offset(db_connection):
+def test_get_conversation_history_with_offset(db_module):
     """Test pagination with offset."""
     # Add 5 messages
     for i in range(5):
@@ -196,14 +128,14 @@ def test_get_conversation_history_with_offset(db_connection):
     assert history[1].content == "Message 1"
 
 
-def test_get_conversation_history_empty(db_connection):
+def test_get_conversation_history_empty(db_module):
     """Test getting history for user with no messages."""
     history = get_conversation_history("nonexistent")
     
     assert len(history) == 0
 
 
-def test_get_conversation_history_different_users(db_connection):
+def test_get_conversation_history_different_users(db_module):
     """Test that users' histories are isolated."""
     add_message("user1", "user", "User 1 message")
     add_message("user2", "user", "User 2 message")
@@ -217,7 +149,7 @@ def test_get_conversation_history_different_users(db_connection):
     assert history2[0].content == "User 2 message"
 
 
-def test_get_recent_messages(db_connection):
+def test_get_recent_messages(db_module):
     """Test getting recent messages in chronological order."""
     # Add messages
     add_message("user1", "user", "First")
@@ -233,7 +165,7 @@ def test_get_recent_messages(db_connection):
     assert recent[2].content == "Third"  # Newest
 
 
-def test_get_recent_messages_with_limit(db_connection):
+def test_get_recent_messages_with_limit(db_module):
     """Test recent messages respects count limit."""
     # Add 5 messages
     for i in range(5):
@@ -247,7 +179,7 @@ def test_get_recent_messages_with_limit(db_connection):
     assert recent[2].content == "Message 4"  # Newest
 
 
-def test_count_messages(db_connection):
+def test_count_messages(db_module):
     """Test counting messages."""
     add_message("user1", "user", "Message 1")
     add_message("user1", "assistant", "Message 2")
@@ -258,14 +190,14 @@ def test_count_messages(db_connection):
     assert count == 3
 
 
-def test_count_messages_empty(db_connection):
+def test_count_messages_empty(db_module):
     """Test counting when no messages exist."""
     count = count_messages("nonexistent")
     
     assert count == 0
 
 
-def test_count_messages_different_users(db_connection):
+def test_count_messages_different_users(db_module):
     """Test that count is per-user."""
     add_message("user1", "user", "Message 1")
     add_message("user1", "user", "Message 2")
@@ -275,7 +207,7 @@ def test_count_messages_different_users(db_connection):
     assert count_messages("user2") == 1
 
 
-def test_clear_conversation_history(db_connection):
+def test_clear_conversation_history(db_module):
     """Test clearing all messages for a user."""
     # Add messages
     add_message("user1", "user", "Message 1")
@@ -290,14 +222,14 @@ def test_clear_conversation_history(db_connection):
     assert count_messages("user2") == 1  # user2 unaffected
 
 
-def test_clear_conversation_history_empty(db_connection):
+def test_clear_conversation_history_empty(db_module):
     """Test clearing when no messages exist."""
     deleted = clear_conversation_history("nonexistent")
     
     assert deleted == 0
 
 
-def test_delete_message(db_connection):
+def test_delete_message(db_module):
     """Test deleting a specific message."""
     msg_id = add_message("user1", "user", "Delete me")
     add_message("user1", "user", "Keep me")
@@ -309,13 +241,13 @@ def test_delete_message(db_connection):
     assert history[0].content == "Keep me"
 
 
-def test_delete_message_not_found(db_connection):
+def test_delete_message_not_found(db_module):
     """Test deleting nonexistent message raises error."""
     with pytest.raises(MemoryNotFoundError):
         delete_message(99999)
 
 
-def test_conversation_message_model(db_connection):
+def test_conversation_message_model(db_module):
     """Test ConversationMessage model validation."""
     msg_id = add_message("user1", "user", "Test")
     history = get_conversation_history("user1")
@@ -329,7 +261,7 @@ def test_conversation_message_model(db_connection):
     assert isinstance(msg.created_at, datetime)
 
 
-def test_conversation_alternating_roles(db_connection):
+def test_conversation_alternating_roles(db_module):
     """Test typical conversation pattern."""
     add_message("user1", "user", "Hello")
     add_message("user1", "assistant", "Hi there!")
@@ -342,11 +274,11 @@ def test_conversation_alternating_roles(db_connection):
     assert [m.role for m in reversed(history)] == ["user", "assistant", "user", "assistant"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # USER MEMORY TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_set_memory(db_connection):
+def test_set_memory(db_module):
     """Test setting user memory."""
     mem_id = set_memory("user1", "preferences", {"theme": "dark", "lang": "en"})
     
@@ -354,7 +286,7 @@ def test_set_memory(db_connection):
     assert mem_id > 0
 
 
-def test_get_memory(db_connection):
+def test_get_memory(db_module):
     """Test retrieving user memory."""
     set_memory("user1", "preferences", {"theme": "dark", "lang": "en"})
     
@@ -365,14 +297,14 @@ def test_get_memory(db_connection):
     assert value["lang"] == "en"
 
 
-def test_get_memory_not_found(db_connection):
+def test_get_memory_not_found(db_module):
     """Test getting nonexistent memory returns None."""
     value = get_memory("user1", "nonexistent")
     
     assert value is None
 
 
-def test_set_memory_upsert(db_connection):
+def test_set_memory_upsert(db_module):
     """Test that setting same key updates value."""
     set_memory("user1", "count", {"value": 1})
     mem_id1 = set_memory("user1", "count", {"value": 2})  # Update
@@ -385,7 +317,7 @@ def test_set_memory_upsert(db_connection):
     assert mem_id1 == mem_id2
 
 
-def test_get_all_memory(db_connection):
+def test_get_all_memory(db_module):
     """Test getting all memory entries."""
     set_memory("user1", "prefs", {"theme": "dark"})
     set_memory("user1", "context", {"topic": "Python"})
@@ -398,14 +330,14 @@ def test_get_all_memory(db_connection):
     assert keys == {"prefs", "context", "profile"}
 
 
-def test_get_all_memory_empty(db_connection):
+def test_get_all_memory_empty(db_module):
     """Test getting memory when none exists."""
     memories = get_all_memory("nonexistent")
     
     assert len(memories) == 0
 
 
-def test_get_all_memory_different_users(db_connection):
+def test_get_all_memory_different_users(db_module):
     """Test that users' memories are isolated."""
     set_memory("user1", "key1", {"data": "user1"})
     set_memory("user2", "key2", {"data": "user2"})
@@ -419,7 +351,7 @@ def test_get_all_memory_different_users(db_connection):
     assert mem2[0].value["data"] == "user2"
 
 
-def test_delete_memory(db_connection):
+def test_delete_memory(db_module):
     """Test deleting a memory entry."""
     set_memory("user1", "delete_me", {"data": "test"})
     set_memory("user1", "keep_me", {"data": "test"})
@@ -431,13 +363,13 @@ def test_delete_memory(db_connection):
     assert memories[0].key == "keep_me"
 
 
-def test_delete_memory_not_found(db_connection):
+def test_delete_memory_not_found(db_module):
     """Test deleting nonexistent memory raises error."""
     with pytest.raises(MemoryNotFoundError):
         delete_memory("user1", "nonexistent")
 
 
-def test_clear_all_memory(db_connection):
+def test_clear_all_memory(db_module):
     """Test clearing all memory for a user."""
     set_memory("user1", "key1", {"data": 1})
     set_memory("user1", "key2", {"data": 2})
@@ -450,14 +382,14 @@ def test_clear_all_memory(db_connection):
     assert len(get_all_memory("user2")) == 1  # user2 unaffected
 
 
-def test_clear_all_memory_empty(db_connection):
+def test_clear_all_memory_empty(db_module):
     """Test clearing when no memory exists."""
     deleted = clear_all_memory("nonexistent")
     
     assert deleted == 0
 
 
-def test_memory_jsonb_complex(db_connection):
+def test_memory_jsonb_complex(db_module):
     """Test storing complex JSONB data."""
     complex_data = {
         "preferences": {
@@ -484,7 +416,7 @@ def test_memory_jsonb_complex(db_connection):
     assert value["ratio"] == 3.14
 
 
-def test_memory_jsonb_empty_dict(db_connection):
+def test_memory_jsonb_empty_dict(db_module):
     """Test storing empty dict."""
     set_memory("user1", "empty", {})
     value = get_memory("user1", "empty")
@@ -492,7 +424,7 @@ def test_memory_jsonb_empty_dict(db_connection):
     assert value == {}
 
 
-def test_memory_jsonb_nested_arrays(db_connection):
+def test_memory_jsonb_nested_arrays(db_module):
     """Test nested arrays in JSONB."""
     data = {
         "matrix": [[1, 2], [3, 4], [5, 6]]
@@ -505,7 +437,7 @@ def test_memory_jsonb_nested_arrays(db_connection):
     assert value["matrix"][2] == [5, 6]
 
 
-def test_user_memory_model(db_connection):
+def test_user_memory_model(db_module):
     """Test UserMemory model validation."""
     set_memory("user1", "test", {"data": "value"})
     memories = get_all_memory("user1")
@@ -518,7 +450,7 @@ def test_user_memory_model(db_connection):
     assert isinstance(mem.updated_at, datetime)
 
 
-def test_memory_key_uniqueness(db_connection):
+def test_memory_key_uniqueness(db_module):
     """Test that same key for different users are independent."""
     set_memory("user1", "shared_key", {"user": "user1"})
     set_memory("user2", "shared_key", {"user": "user2"})
@@ -530,11 +462,11 @@ def test_memory_key_uniqueness(db_connection):
     assert val2["user"] == "user2"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # USER STATE TESTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_set_user_state(db_connection):
+def test_set_user_state(db_module):
     """Test setting user state."""
     set_user_state("user1", "active")
     
@@ -545,7 +477,7 @@ def test_set_user_state(db_connection):
     assert state.mode == "active"
 
 
-def test_set_user_state_upsert(db_connection):
+def test_set_user_state_upsert(db_module):
     """Test that setting state again updates it."""
     set_user_state("user1", "active")
     set_user_state("user1", "paused")
@@ -555,14 +487,14 @@ def test_set_user_state_upsert(db_connection):
     assert state.mode == "paused"
 
 
-def test_get_user_state_not_found(db_connection):
+def test_get_user_state_not_found(db_module):
     """Test getting nonexistent state returns None."""
     state = get_user_state("nonexistent")
     
     assert state is None
 
 
-def test_delete_user_state(db_connection):
+def test_delete_user_state(db_module):
     """Test deleting user state."""
     set_user_state("user1", "active")
     delete_user_state("user1")
@@ -572,13 +504,13 @@ def test_delete_user_state(db_connection):
     assert state is None
 
 
-def test_delete_user_state_not_found(db_connection):
+def test_delete_user_state_not_found(db_module):
     """Test deleting nonexistent state raises error."""
     with pytest.raises(MemoryNotFoundError):
         delete_user_state("nonexistent")
 
 
-def test_user_state_model(db_connection):
+def test_user_state_model(db_module):
     """Test UserState model validation."""
     set_user_state("user1", "active")
     state = get_user_state("user1")
@@ -589,7 +521,7 @@ def test_user_state_model(db_connection):
     assert isinstance(state.updated_at, datetime)
 
 
-def test_user_state_different_users(db_connection):
+def test_user_state_different_users(db_module):
     """Test that user states are isolated."""
     set_user_state("user1", "active")
     set_user_state("user2", "paused")
@@ -601,11 +533,11 @@ def test_user_state_different_users(db_connection):
     assert state2.mode == "paused"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # EDGE CASES & ERROR CONDITIONS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-def test_long_message_content(db_connection):
+def test_long_message_content(db_module):
     """Test storing long message content."""
     long_content = "x" * 10000
     msg_id = add_message("user1", "user", long_content)
@@ -614,33 +546,33 @@ def test_long_message_content(db_connection):
     assert history[0].content == long_content
 
 
-def test_unicode_in_messages(db_connection):
+def test_unicode_in_messages(db_module):
     """Test Unicode characters in messages."""
-    msg = "Hello 世界! 🎉 Привет مرحبا"
+    msg = "Hello ä¸–ç•Œ! ðŸŽ‰ ÐŸÑ€Ð¸Ð²ÐµÑ‚ Ù…Ø±Ø­Ø¨Ø§"
     add_message("user1", "user", msg)
     
     history = get_conversation_history("user1")
     assert history[0].content == msg
 
 
-def test_unicode_in_memory(db_connection):
+def test_unicode_in_memory(db_module):
     """Test Unicode in memory values."""
     data = {
-        "message": "你好世界",
-        "emoji": "🚀",
-        "russian": "Привет",
-        "arabic": "مرحبا"
+        "message": "ä½ å¥½ä¸–ç•Œ",
+        "emoji": "ðŸš€",
+        "russian": "ÐŸÑ€Ð¸Ð²ÐµÑ‚",
+        "arabic": "Ù…Ø±Ø­Ø¨Ø§"
     }
     set_memory("user1", "unicode", data)
     
     value = get_memory("user1", "unicode")
-    assert value["message"] == "你好世界"
-    assert value["emoji"] == "🚀"
-    assert value["russian"] == "Привет"
-    assert value["arabic"] == "مرحبا"
+    assert value["message"] == "ä½ å¥½ä¸–ç•Œ"
+    assert value["emoji"] == "ðŸš€"
+    assert value["russian"] == "ÐŸÑ€Ð¸Ð²ÐµÑ‚"
+    assert value["arabic"] == "Ù…Ø±Ø­Ø¨Ø§"
 
 
-def test_large_conversation_history(db_connection):
+def test_large_conversation_history(db_module):
     """Test handling large conversation history."""
     # Add 100 messages
     for i in range(100):
@@ -655,7 +587,7 @@ def test_large_conversation_history(db_connection):
     assert recent[-1].content == "Message 99"  # Newest
 
 
-def test_concurrent_memory_updates(db_connection):
+def test_concurrent_memory_updates(db_module):
     """Test that concurrent updates to same key work correctly."""
     set_memory("user1", "counter", {"value": 1})
     set_memory("user1", "counter", {"value": 2})
@@ -665,7 +597,7 @@ def test_concurrent_memory_updates(db_connection):
     assert value["value"] == 3
 
 
-def test_empty_content_message(db_connection):
+def test_empty_content_message(db_module):
     """Test storing message with empty content."""
     msg_id = add_message("user1", "user", "")
     
@@ -673,7 +605,7 @@ def test_empty_content_message(db_connection):
     assert history[0].content == ""
 
 
-def test_special_characters_in_user_id(db_connection):
+def test_special_characters_in_user_id(db_module):
     """Test user_id with special characters."""
     user_id = "user@example.com"
     add_message(user_id, "user", "Test")
@@ -682,7 +614,7 @@ def test_special_characters_in_user_id(db_connection):
     assert count == 1
 
 
-def test_memory_value_with_null(db_connection):
+def test_memory_value_with_null(db_module):
     """Test JSONB with null values."""
     data = {
         "key1": None,
@@ -698,7 +630,7 @@ def test_memory_value_with_null(db_connection):
     assert value["key3"]["nested"] is None
 
 
-def test_pagination_edge_cases(db_connection):
+def test_pagination_edge_cases(db_module):
     """Test pagination with edge cases."""
     # Add 5 messages
     for i in range(5):
@@ -713,7 +645,7 @@ def test_pagination_edge_cases(db_connection):
     assert len(history) == 5
 
 
-def test_multiple_users_concurrent(db_connection):
+def test_multiple_users_concurrent(db_module):
     """Test operations across multiple users simultaneously."""
     # Simulate multiple users
     for i in range(10):
@@ -730,7 +662,7 @@ def test_multiple_users_concurrent(db_connection):
         assert get_user_state(user_id).mode == "active"
 
 
-def test_verify_real_database(db_connection):
+def test_verify_real_database(db_module):
     """Verification test: Prove we're using real database, not mocks."""
     import psycopg2, os
     

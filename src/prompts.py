@@ -34,7 +34,7 @@ from typing import Optional, Any
 from datetime import datetime
 from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from db.db import get_conn, put_conn
 
@@ -80,6 +80,8 @@ class Template(BaseModel):
     updated_at: datetime
     is_active: bool = True
     
+    model_config = ConfigDict(from_attributes=True)
+    
     @field_validator('content')
     @classmethod
     def validate_jinja2_syntax(cls, v: str) -> str:
@@ -90,9 +92,6 @@ class Template(BaseModel):
             return v
         except Jinja2SyntaxError as e:
             raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
-    
-    class Config:
-        from_attributes = True
 
 
 class TemplateVersion(BaseModel):
@@ -106,8 +105,7 @@ class TemplateVersion(BaseModel):
     created_by: Optional[str] = None
     change_description: Optional[str] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -124,10 +122,10 @@ def create_template(
     Create a new template with version 1.
     
     Args:
-        name: Unique template name
+        name: Template name (unique)
         content: Jinja2 template content
-        created_by: Optional user/system identifier
-        change_description: Optional description of this template
+        created_by: Who created this template
+        change_description: Description of what this template does
     
     Returns:
         Template ID
@@ -135,16 +133,25 @@ def create_template(
     Raises:
         TemplateSyntaxError: If Jinja2 syntax is invalid
         PromptError: If database operation fails
+    
+    Example:
+        >>> template_id = create_template(
+        ...     "greeting",
+        ...     "Hello {{name}}!",
+        ...     created_by="admin",
+        ...     change_description="Simple greeting template"
+        ... )
     """
-    # Validate syntax
-    Template(
-        id=0,
-        name=name,
-        content=content,
-        current_version=1,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
-    )
+    # Validate name
+    if not name or not name.strip():
+        raise PromptError("Template name cannot be empty")
+    
+    # Validate syntax (will raise TemplateSyntaxError if invalid)
+    try:
+        env = SandboxedEnvironment()
+        env.parse(content)
+    except Jinja2SyntaxError as e:
+        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
     
     conn = get_conn()
     try:
@@ -152,15 +159,15 @@ def create_template(
             # Insert template
             cur.execute(
                 """
-                INSERT INTO system_prompt (name, content, current_version, is_active)
-                VALUES (%s, %s, 1, true)
+                INSERT INTO system_prompt (name, content, current_version)
+                VALUES (%s, %s, 1)
                 RETURNING id
                 """,
                 (name, content)
             )
             template_id = cur.fetchone()[0]
             
-            # Insert version history
+            # Insert version 1
             cur.execute(
                 """
                 INSERT INTO prompt_version_history 
@@ -171,7 +178,7 @@ def create_template(
             )
             
             conn.commit()
-            logger.info(f"Created template '{name}' (id={template_id}) v1")
+            logger.info(f"Created template '{name}' (id: {template_id})")
             return template_id
             
     except Exception as e:
@@ -311,11 +318,14 @@ def update_template(
     """
     Update template content (creates new version).
     
+    This is an immutable operation - the old version is preserved
+    in prompt_version_history and a new version is created.
+    
     Args:
         template_id: Template ID
         content: New template content
-        created_by: Optional user/system identifier
-        change_description: Optional description of changes
+        created_by: Who made this update
+        change_description: Description of what changed
     
     Returns:
         New version number
@@ -324,32 +334,36 @@ def update_template(
         TemplateNotFoundError: If template doesn't exist
         TemplateSyntaxError: If Jinja2 syntax is invalid
         PromptError: If database operation fails
+    
+    Example:
+        >>> new_version = update_template(
+        ...     template_id=5,
+        ...     content="Updated: Hello {{name}}!",
+        ...     created_by="admin",
+        ...     change_description="Added greeting prefix"
+        ... )
+        >>> print(f"Created version {new_version}")
     """
     # Validate syntax
-    Template(
-        id=template_id,
-        name="temp",
-        content=content,
-        current_version=1,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
-    )
+    try:
+        env = SandboxedEnvironment()
+        env.parse(content)
+    except Jinja2SyntaxError as e:
+        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
     
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             # Get current version
             cur.execute(
-                "SELECT current_version, name FROM system_prompt WHERE id = %s",
+                "SELECT current_version FROM system_prompt WHERE id = %s",
                 (template_id,)
             )
             row = cur.fetchone()
             if not row:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
             
-            current_version = row[0]
-            name = row[1]
-            new_version = current_version + 1
+            new_version = row[0] + 1
             
             # Update template
             cur.execute(
@@ -361,7 +375,7 @@ def update_template(
                 (content, new_version, template_id)
             )
             
-            # Insert version history
+            # Insert new version
             cur.execute(
                 """
                 INSERT INTO prompt_version_history
@@ -372,7 +386,7 @@ def update_template(
             )
             
             conn.commit()
-            logger.info(f"Updated template '{name}' (id={template_id}) to v{new_version}")
+            logger.info(f"Updated template {template_id} to version {new_version}")
             return new_version
             
     except (TemplateNotFoundError, TemplateSyntaxError):
@@ -386,7 +400,7 @@ def update_template(
 
 def deactivate_template(template_id: int) -> None:
     """
-    Deactivate a template (soft delete).
+    Deactivate a template.
     
     Args:
         template_id: Template ID
@@ -548,10 +562,13 @@ def rollback_to_version(
     """
     Rollback template to a previous version (creates new version with old content).
     
+    This doesn't actually delete the newer versions - it creates a NEW version
+    with the content from the specified version. This maintains the full audit trail.
+    
     Args:
         template_id: Template ID
-        version: Version to rollback to
-        created_by: Optional user/system identifier
+        version: Version number to rollback to
+        created_by: Who performed the rollback
     
     Returns:
         New version number
@@ -559,86 +576,139 @@ def rollback_to_version(
     Raises:
         TemplateNotFoundError: If template or version doesn't exist
         PromptError: If database operation fails
+    
+    Example:
+        >>> # Template has versions 1, 2, 3
+        >>> new_version = rollback_to_version(template_id, 1, "admin")
+        >>> print(f"Rolled back to v1, created v{new_version}")
+        # Output: "Rolled back to v1, created v4"
     """
-    # Get the version content
-    old_version = get_version(template_id, version)
-    
-    # Create new version with old content
-    change_desc = f"Rollback to version {version}"
-    new_version = update_template(
-        template_id,
-        old_version.content,
-        created_by,
-        change_desc
-    )
-    
-    logger.info(f"Rolled back template {template_id} from v{version} to new v{new_version}")
-    return new_version
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Get the old version's content
+            cur.execute(
+                "SELECT content FROM prompt_version_history WHERE template_id = %s AND version = %s",
+                (template_id, version)
+            )
+            row = cur.fetchone()
+            if not row:
+                raise TemplateNotFoundError(
+                    f"Template {template_id} version {version} not found"
+                )
+            old_content = row[0]
+            
+            # Get current version number
+            cur.execute(
+                "SELECT current_version FROM system_prompt WHERE id = %s",
+                (template_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                raise TemplateNotFoundError(f"Template {template_id} not found")
+            
+            new_version = row[0] + 1
+            
+            # Update template with old content
+            cur.execute(
+                """
+                UPDATE system_prompt
+                SET content = %s, current_version = %s, updated_at = NOW()
+                WHERE id = %s
+                """,
+                (old_content, new_version, template_id)
+            )
+            
+            # Insert new version with rollback description
+            change_desc = f"Rolled back to version {version}"
+            cur.execute(
+                """
+                INSERT INTO prompt_version_history
+                (template_id, version, content, created_by, change_description)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (template_id, new_version, old_content, created_by, change_desc)
+            )
+            
+            conn.commit()
+            logger.info(f"Rolled back template {template_id} to version {version} (created v{new_version})")
+            return new_version
+            
+    except TemplateNotFoundError:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise PromptError(f"Failed to rollback template: {e}")
+    finally:
+        put_conn(conn)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # RENDERING
 # ═══════════════════════════════════════════════════════════════════════════
 
-def render_template(
-    template_id: int,
-    variables: Optional[dict[str, Any]] = None
-) -> str:
+def render_template(template_id: int, variables: Optional[dict[str, Any]] = None) -> str:
     """
     Render a template with variables.
     
+    Uses Jinja2 SandboxedEnvironment for secure rendering.
+    StrictUndefined means missing variables will raise an error.
+    
     Args:
         template_id: Template ID
-        variables: Dictionary of template variables
+        variables: Dict of variables to pass to template
     
     Returns:
-        Rendered template content
+        Rendered template string
     
     Raises:
         TemplateNotFoundError: If template doesn't exist
         TemplateRenderError: If rendering fails
+    
+    Example:
+        >>> rendered = render_template(
+        ...     template_id=5,
+        ...     variables={"name": "World", "greeting": "Hello"}
+        ... )
+        >>> print(rendered)
+        Hello World!
     """
+    if variables is None:
+        variables = {}
+    
     template = get_template(template_id)
     
     try:
-        env = SandboxedEnvironment(
-            autoescape=False,
-            undefined=StrictUndefined
-        )
+        env = SandboxedEnvironment(undefined=StrictUndefined)
         jinja_template = env.from_string(template.content)
-        return jinja_template.render(**(variables or {}))
-        
+        return jinja_template.render(**variables)
     except Exception as e:
         raise TemplateRenderError(f"Failed to render template: {e}")
 
 
-def render_template_by_name(
-    name: str,
-    variables: Optional[dict[str, Any]] = None
-) -> str:
+def render_template_by_name(name: str, variables: Optional[dict[str, Any]] = None) -> str:
     """
     Render a template by name with variables.
     
     Args:
         name: Template name
-        variables: Dictionary of template variables
+        variables: Dict of variables to pass to template
     
     Returns:
-        Rendered template content
+        Rendered template string
     
     Raises:
         TemplateNotFoundError: If template doesn't exist
         TemplateRenderError: If rendering fails
-    """
-    template = get_template_by_name(name)
     
-    try:
-        env = SandboxedEnvironment(
-            autoescape=False,
-            undefined=StrictUndefined
-        )
-        jinja_template = env.from_string(template.content)
-        return jinja_template.render(**(variables or {}))
-        
-    except Exception as e:
-        raise TemplateRenderError(f"Failed to render template: {e}")
+    Example:
+        >>> rendered = render_template_by_name(
+        ...     "greeting",
+        ...     {"name": "World"}
+        ... )
+    """
+    if variables is None:
+        variables = {}
+    
+    template = get_template_by_name(name)
+    return render_template(template.id, variables)
