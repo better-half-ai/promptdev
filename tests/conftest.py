@@ -38,7 +38,7 @@ def test_db(postgres_container, migrations_dir):
         password=os.environ["TEST_DB_PASSWORD"],
         database=os.environ["TEST_DB_NAME"],
     )
-    for migration in ["001_init.sql", "002_prompts_schema.sql", "003_guardrails_schema.sql", "004_telemetry_schema.sql"]:
+    for migration in ["001_init.sql", "002_prompts_schema.sql"]:
         migration_file = migrations_dir / migration
         if migration_file.exists():
             with migration_file.open("r") as f:
@@ -90,9 +90,6 @@ def db_module(postgres_container, test_db):
                 cur.execute("TRUNCATE TABLE user_state CASCADE")
                 cur.execute("TRUNCATE TABLE system_prompt RESTART IDENTITY CASCADE")
                 cur.execute("TRUNCATE TABLE prompt_version_history CASCADE")
-                cur.execute("TRUNCATE TABLE llm_requests CASCADE")
-                cur.execute("TRUNCATE TABLE user_activity CASCADE")
-                cur.execute("TRUNCATE TABLE metric_snapshots CASCADE")
             conn.commit()
         finally:
             db_module.put_conn(conn)
