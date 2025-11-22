@@ -20,10 +20,12 @@ from typing import Optional, Any
 from datetime import datetime, UTC
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # Import from other modules
-from prompts import (
+from src.prompts import (
     create_template,
     update_template,
     get_template,
@@ -33,7 +35,7 @@ from prompts import (
     rollback_to_version,
     TemplateNotFoundError,
 )
-from memory import (
+from src.memory import (
     add_message,
     get_conversation_history,
     get_recent_messages,
@@ -48,12 +50,12 @@ from memory import (
     delete_user_state,
     UserState,
 )
-from context import (
+from src.context import (
     build_prompt_context,
     build_prompt_context_simple,
     get_context_summary,
 )
-from guardrails import (
+from src.guardrails import (
     create_config,
     get_config,
     get_config_by_id,
@@ -65,8 +67,8 @@ from guardrails import (
     GuardrailNotFoundError,
     InvalidRulesError,
 )
-from llm_client import call_mistral_simple
-from telemetry import track_llm_request, get_dashboard_stats, get_user_stats, aggregate_metrics
+from src.llm_client import call_mistral_simple
+from src.telemetry import track_llm_request, get_dashboard_stats, get_user_stats, aggregate_metrics
 from db.db import get_conn, put_conn
 
 logger = logging.getLogger(__name__)
@@ -85,10 +87,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files for dashboard UI
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ═══════════════════════════════════════════════════════════════════════════
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirect root to operator dashboard."""
+    return RedirectResponse(url="/static/dashboard.html")
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # MODELS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class ChatRequest(BaseModel):
     """User chat request."""
@@ -150,9 +160,9 @@ class GuardrailUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # INTERVENTION HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def halt_conversation(user_id: str, operator: str, reason: str) -> None:
     """
@@ -237,9 +247,9 @@ def get_default_template_name() -> str:
     return sorted(templates, key=lambda t: t.name)[0].name
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # SYSTEM ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/health")
 async def health():
@@ -247,9 +257,9 @@ async def health():
     return {"status": "ok"}
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # USER ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
@@ -375,9 +385,9 @@ async def clear_history(user_id: str):
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: TEMPLATE ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/admin/templates")
 async def list_all_templates():
@@ -502,9 +512,9 @@ async def rollback_template_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: MONITORING ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/admin/users")
 async def list_users():
@@ -557,6 +567,37 @@ async def get_user_conversation(user_id: str):
     }
 
 
+@app.get("/admin/conversations/export")
+async def export_conversation(user_id: str = Query(...)):
+    """Export conversation as JSON download."""
+    messages = get_conversation_history(user_id)
+    state = get_user_state(user_id)
+    all_memory = get_all_memory(user_id)
+    
+    export_data = {
+        "user_id": user_id,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "state": state.mode if state else None,
+        "memory": all_memory,
+        "messages": [
+            {
+                "id": msg.id,
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat()
+            }
+            for msg in messages
+        ]
+    }
+    
+    return JSONResponse(
+        content=export_data,
+        headers={
+            "Content-Disposition": f"attachment; filename=conversation_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+        }
+    )
+
+
 @app.get("/admin/memory/{user_id}")
 async def get_user_memory(user_id: str):
     """Get all memory for a user."""
@@ -605,9 +646,9 @@ async def set_state(user_id: str, mode: str = Query(..., min_length=1)):
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: INTERVENTION ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.post("/admin/interventions/{user_id}/halt")
 async def halt_user_conversation(user_id: str, request: HaltRequest):
@@ -659,9 +700,9 @@ async def list_halted_conversations():
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: GUARDRAILS ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.post("/admin/guardrails")
 async def create_guardrail_config(request: GuardrailCreate):
@@ -789,9 +830,9 @@ async def delete_guardrail_config(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete config: {e}")
 
-# ════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: TELEMETRY & STATS ENDPOINTS
-# ════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/admin/stats/overview")
 async def get_stats_overview():
