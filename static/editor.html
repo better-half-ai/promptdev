@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Template Editor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+        }
+        .header p {
+            margin: 0;
+            opacity: 0.8;
+        }
+        .tabs {
+            display: flex;
+            background: #34495e;
+            border-bottom: 1px solid #2c3e50;
+        }
+        .tab {
+            padding: 15px 30px;
+            color: white;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .tab:hover {
+            background: #2c3e50;
+        }
+        .tab.active {
+            background: white;
+            color: #2c3e50;
+        }
+        .tab-content {
+            display: none;
+            padding: 20px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        .form-group textarea {
+            min-height: 300px;
+            resize: vertical;
+        }
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+        button.danger {
+            background: #e74c3c;
+        }
+        button.danger:hover {
+            background: #c0392b;
+        }
+        button.secondary {
+            background: #95a5a6;
+        }
+        button.secondary:hover {
+            background: #7f8c8d;
+        }
+        .version-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .version-item {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .version-item:hover {
+            background: #f9f9f9;
+        }
+        .version-info {
+            flex: 1;
+        }
+        .version-number {
+            font-weight: bold;
+            color: #3498db;
+            font-size: 18px;
+        }
+        .version-meta {
+            color: #7f8c8d;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .version-actions button {
+            margin-left: 5px;
+        }
+        .message {
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .message.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .message.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .content-preview {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Template Editor</h1>
+            <p>Edit and manage template versions</p>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('editor', event)">Editor</button>
+            <button class="tab" onclick="showTab('history', event)">Version History</button>
+            <button class="tab" onclick="showTab('preview', event)">Preview</button>
+        </div>
+
+        <!-- Editor Tab -->
+        <div id="editor" class="tab-content active">
+            <div id="editor-message"></div>
+            
+            <div class="form-group">
+                <label>Template Name</label>
+                <input type="text" id="template-name" readonly>
+            </div>
+
+            <div class="form-group">
+                <label>Template Content (Jinja2)</label>
+                <textarea id="template-content"></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>Change Description</label>
+                <input type="text" id="change-description" placeholder="Describe your changes...">
+            </div>
+
+            <div class="form-group">
+                <label>Updated By</label>
+                <input type="text" id="updated-by" placeholder="Your name or ID">
+            </div>
+
+            <div>
+                <button onclick="saveTemplate()">Save Changes</button>
+                <button class="secondary" onclick="reloadTemplate()">Reload</button>
+                <button class="secondary" onclick="window.location.href='/static/dashboard.html'">Back to Dashboard</button>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="history" class="tab-content">
+            <div id="history-message"></div>
+            <h2>Version History</h2>
+            <ul id="version-list" class="version-list"></ul>
+        </div>
+
+        <!-- Preview Tab -->
+        <div id="preview" class="tab-content">
+            <div id="preview-message"></div>
+            <h2>Template Preview</h2>
+            <p>Current template content:</p>
+            <div id="preview-content" class="content-preview"></div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const templateId = urlParams.get('id');
+        let currentTemplate = null;
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!templateId) {
+                showMessage('editor', 'error', 'No template ID provided');
+                return;
+            }
+            loadTemplate();
+            
+            // Handle initial tab from URL
+            const initialTab = urlParams.get('tab');
+            if (initialTab) {
+                showTab(initialTab);
+            }
+        });
+
+        /**
+         * Show a specific tab - FIXED to handle both event-based and programmatic calls
+         * @param {string} tabName - Name of the tab to show
+         * @param {Event|null} event - Optional event object (may be undefined when called programmatically)
+         */
+        function showTab(tabName, event) {
+            // Handle active tab styling
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            // If event is provided and has a target, use it
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Otherwise, find the button by matching text content
+                tabs.forEach(tab => {
+                    const tabText = tab.textContent.toLowerCase().trim();
+                    const targetText = tabName.toLowerCase().trim();
+                    if (tabText === targetText || tabText.includes(targetText)) {
+                        tab.classList.add('active');
+                    }
+                });
+            }
+
+            // Show/hide content
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+            
+            const target = document.getElementById(tabName);
+            if (target) {
+                target.classList.add('active');
+            }
+
+            // Load data for specific tabs
+            if (tabName === 'history' && templateId) {
+                loadVersionHistory();
+            } else if (tabName === 'preview' && currentTemplate) {
+                updatePreview();
+            }
+        }
+
+        function showMessage(tabId, type, message) {
+            const messageDiv = document.getElementById(`${tabId}-message`);
+            if (messageDiv) {
+                messageDiv.className = `message ${type}`;
+                messageDiv.textContent = message;
+                messageDiv.style.display = 'block';
+                setTimeout(() => {
+                    messageDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        async function loadTemplate() {
+            try {
+                const response = await fetch(`/admin/templates/${templateId}`);
+                if (!response.ok) throw new Error('Failed to load template');
+                
+                const data = await response.json();
+                currentTemplate = data;
+                
+                document.getElementById('template-name').value = data.name;
+                document.getElementById('template-content').value = data.content;
+                
+                updatePreview();
+            } catch (error) {
+                showMessage('editor', 'error', `Error loading template: ${error.message}`);
+            }
+        }
+
+        async function saveTemplate() {
+            const content = document.getElementById('template-content').value;
+            const changeDescription = document.getElementById('change-description').value;
+            const updatedBy = document.getElementById('updated-by').value;
+
+            if (!updatedBy) {
+                showMessage('editor', 'error', 'Please enter your name or ID');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/admin/templates/${templateId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        content: content,
+                        updated_by: updatedBy,
+                        change_description: changeDescription || undefined
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to save template');
+                
+                const data = await response.json();
+                showMessage('editor', 'success', `Template saved successfully! New version: ${data.new_version}`);
+                
+                // Clear change description
+                document.getElementById('change-description').value = '';
+                
+                // Reload template to get updated version
+                await loadTemplate();
+            } catch (error) {
+                showMessage('editor', 'error', `Error saving template: ${error.message}`);
+            }
+        }
+
+        async function loadVersionHistory() {
+            try {
+                const response = await fetch(`/admin/templates/${templateId}/history`);
+                if (!response.ok) throw new Error('Failed to load version history');
+                
+                const data = await response.json();
+                const versionList = document.getElementById('version-list');
+                versionList.innerHTML = '';
+
+                if (data.versions.length === 0) {
+                    versionList.innerHTML = '<li class="version-item">No version history available</li>';
+                    return;
+                }
+
+                data.versions.reverse().forEach(version => {
+                    const li = document.createElement('li');
+                    li.className = 'version-item';
+                    li.innerHTML = `
+                        <div class="version-info">
+                            <div class="version-number">Version ${version.version}</div>
+                            <div class="version-meta">
+                                ${new Date(version.created_at).toLocaleString()} by ${version.created_by || 'Unknown'}
+                                ${version.change_description ? `<br>${version.change_description}` : ''}
+                            </div>
+                        </div>
+                        <div class="version-actions">
+                            <button onclick="viewVersion(${version.version}, \`${escapeHtml(version.content)}\`)">View Content</button>
+                            <button class="secondary" onclick="rollbackVersion(${version.version})">Rollback</button>
+                        </div>
+                    `;
+                    versionList.appendChild(li);
+                });
+            } catch (error) {
+                showMessage('history', 'error', `Error loading version history: ${error.message}`);
+            }
+        }
+
+        function viewVersion(versionNumber, content) {
+            // Show preview tab - FIXED: Don't pass event parameter since we don't have one
+            showTab('preview');
+            
+            const previewContent = document.getElementById('preview-content');
+            previewContent.innerHTML = `<strong>Version ${versionNumber}</strong><br><br>${escapeHtml(content)}`;
+            
+            showMessage('preview', 'success', `Viewing version ${versionNumber}`);
+        }
+
+        async function rollbackVersion(versionNumber) {
+            if (!confirm(`Are you sure you want to rollback to version ${versionNumber}? This will create a new version.`)) {
+                return;
+            }
+
+            const updatedBy = prompt('Enter your name or ID:');
+            if (!updatedBy) return;
+
+            try {
+                const response = await fetch(`/admin/templates/${templateId}/rollback/${versionNumber}?updated_by=${encodeURIComponent(updatedBy)}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to rollback');
+                
+                const data = await response.json();
+                showMessage('history', 'success', `Rolled back to version ${versionNumber}! New version: ${data.new_version}`);
+                
+                // Reload template and history
+                await loadTemplate();
+                await loadVersionHistory();
+            } catch (error) {
+                showMessage('history', 'error', `Error rolling back: ${error.message}`);
+            }
+        }
+
+        function reloadTemplate() {
+            if (confirm('Reload template from server? Any unsaved changes will be lost.')) {
+                loadTemplate();
+            }
+        }
+
+        function updatePreview() {
+            if (currentTemplate) {
+                const previewContent = document.getElementById('preview-content');
+                previewContent.textContent = currentTemplate.content;
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

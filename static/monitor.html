@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Conversation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .topbar {
+            background: #1a1a1a;
+            border-bottom: 1px solid #2a2a2a;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .user-info {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .user-id {
+            font-size: 1.2em;
+            font-weight: 600;
+            font-family: monospace;
+            color: #667eea;
+        }
+        .stat {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .stat span {
+            color: #fff;
+            font-weight: 600;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn:hover { opacity: 0.8; }
+        .btn-secondary {
+            background: #2a2a2a;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 30px;
+            background: #0a0a0a;
+        }
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 12px;
+        }
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            background: #2a2a2a;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .message.user .message-avatar {
+            background: #667eea;
+        }
+        .message-bubble {
+            background: #1a1a1a;
+            padding: 12px 16px;
+            border-radius: 16px;
+            max-width: 65%;
+        }
+        .message.user .message-bubble {
+            background: #667eea;
+        }
+        .message-time {
+            font-size: 0.75em;
+            color: #666;
+            margin-top: 6px;
+        }
+        .sidebar {
+            width: 340px;
+            background: #1a1a1a;
+            border-left: 1px solid #2a2a2a;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        .section {
+            margin-bottom: 28px;
+        }
+        .section-title {
+            font-size: 0.75em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .info-box {
+            background: #0a0a0a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 14px;
+            font-size: 0.9em;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .info-row:last-child {
+            margin-bottom: 0;
+        }
+        .info-label {
+            color: #666;
+        }
+        .info-value {
+            color: #fff;
+            font-weight: 600;
+        }
+        .action-btn {
+            width: 100%;
+            padding: 10px;
+            background: #2a2a2a;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 8px;
+        }
+        .action-btn:hover {
+            background: #3a3a3a;
+        }
+        .action-btn.primary {
+            background: #667eea;
+        }
+        .action-btn.danger {
+            background: #dc3545;
+        }
+        textarea {
+            width: 100%;
+            height: 80px;
+            background: #0a0a0a;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 10px;
+            color: #fff;
+            font-size: 0.85em;
+            resize: none;
+        }
+        .message-area {
+            background: #667eea;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 20px 30px;
+        }
+        .error {
+            background: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="user-info">
+            <div class="user-id" id="user-id"></div>
+            <div class="stat">Messages: <span id="message-count">0</span></div>
+            <div class="stat">State: <span id="user-state">active</span></div>
+        </div>
+        <div class="controls">
+            <button class="btn btn-secondary" onclick="location.href='dashboard.html'">Back</button>
+            <button class="btn btn-secondary" onclick="exportConversation()">Export</button>
+            <button class="btn btn-danger" onclick="haltConversation()">Halt</button>
+        </div>
+    </div>
+    
+    <div id="message-area"></div>
+    
+    <div class="main">
+        <div class="messages" id="messages"></div>
+        
+        <div class="sidebar">
+            <div class="section">
+                <div class="section-title">Context</div>
+                <div class="info-box" id="context-info">
+                    <div class="info-row">
+                        <div class="info-label">Total Messages</div>
+                        <div class="info-value" id="total-messages">0</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">State</div>
+                        <div class="info-value" id="state-value">active</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">Actions</div>
+                <button class="action-btn primary" onclick="location.reload()">Refresh</button>
+                <button class="action-btn" onclick="showInjectForm()">Inject Message</button>
+                <button class="action-btn danger" id="halt-btn" onclick="haltConversation()">Halt Conversation</button>
+                <button class="action-btn primary" id="resume-btn" onclick="resumeConversation()" style="display: none;">Resume Conversation</button>
+            </div>
+            
+            <div class="section" id="inject-form" style="display: none;">
+                <div class="section-title">Inject Message</div>
+                <textarea id="inject-content" placeholder="Message to inject..."></textarea>
+                <button class="action-btn primary" onclick="injectMessage()">Send</button>
+                <button class="action-btn" onclick="hideInjectForm()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';
+        const urlParams = new URLSearchParams(window.location.search);
+        const userId = urlParams.get('user');
+        
+        if (!userId) {
+            alert('No user specified');
+            location.href = 'dashboard.html';
+        }
+
+        function showMessage(text, isError = false) {
+            const area = document.getElementById('message-area');
+            area.innerHTML = `<div class="message-area ${isError ? 'error' : ''}">${text}</div>`;
+            setTimeout(() => area.innerHTML = '', 5000);
+        }
+
+        function showInjectForm() {
+            document.getElementById('inject-form').style.display = 'block';
+        }
+
+        function hideInjectForm() {
+            document.getElementById('inject-form').style.display = 'none';
+            document.getElementById('inject-content').value = '';
+        }
+
+        async function loadConversation() {
+            document.getElementById('user-id').textContent = userId;
+            
+            try {
+                const res = await fetch(API + `/admin/conversations/${userId}`);
+                const data = await res.json();
+                
+                document.getElementById('message-count').textContent = data.message_count;
+                document.getElementById('total-messages').textContent = data.message_count;
+                document.getElementById('user-state').textContent = data.state || 'active';
+                document.getElementById('state-value').textContent = data.state || 'active';
+                
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML = data.messages.map(m => `
+                    <div class="message ${m.role}">
+                        <div class="message-avatar"></div>
+                        <div>
+                            <div class="message-bubble">${m.content}</div>
+                            <div class="message-time">${new Date(m.created_at).toLocaleString()}</div>
+                        </div>
+                    </div>
+                `).join('');
+                
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                
+                // Update button visibility based on state
+                if (data.state === 'halted') {
+                    document.getElementById('halt-btn').style.display = 'none';
+                    document.getElementById('resume-btn').style.display = 'block';
+                } else {
+                    document.getElementById('halt-btn').style.display = 'block';
+                    document.getElementById('resume-btn').style.display = 'none';
+                }
+            } catch (e) {
+                showMessage('Failed to load conversation: ' + e.message, true);
+            }
+        }
+
+        async function haltConversation() {
+            const reason = prompt('Reason for halting:');
+            if (!reason) return;
+            
+            try {
+                await fetch(API + `/admin/interventions/${userId}/halt`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        operator: 'current_operator',
+                        reason: reason
+                    })
+                });
+                showMessage('Conversation halted');
+                loadConversation();
+            } catch (e) {
+                showMessage('Failed to halt: ' + e.message, true);
+            }
+        }
+
+        async function resumeConversation() {
+            try {
+                await fetch(API + `/admin/interventions/${userId}/resume?operator=current_operator`, {
+                    method: 'POST'
+                });
+                showMessage('Conversation resumed');
+                loadConversation();
+            } catch (e) {
+                showMessage('Failed to resume: ' + e.message, true);
+            }
+        }
+
+        async function injectMessage() {
+            const content = document.getElementById('inject-content').value.trim();
+            if (!content) return;
+            
+            try {
+                await fetch(API + `/admin/interventions/${userId}/inject`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        content: content,
+                        operator: 'current_operator'
+                    })
+                });
+                showMessage('Message injected');
+                hideInjectForm();
+                loadConversation();
+            } catch (e) {
+                showMessage('Failed to inject: ' + e.message, true);
+            }
+        }
+
+        async function exportConversation() {
+            window.open(API + `/admin/conversations/${userId}/export?format=json`, '_blank');
+        }
+
+        loadConversation();
+        setInterval(loadConversation, 5000);
+    </script>
+</body>
+</html>

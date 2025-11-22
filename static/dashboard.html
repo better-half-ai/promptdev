@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operator Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+        }
+        .sidebar {
+            width: 240px;
+            background: #1a1a1a;
+            border-right: 1px solid #2a2a2a;
+            padding: 20px;
+        }
+        .logo {
+            font-size: 1.5em;
+            font-weight: 700;
+            margin-bottom: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .nav-item {
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            color: #888;
+        }
+        .nav-item:hover, .nav-item.active {
+            background: #667eea;
+            color: #fff;
+        }
+        .main {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .topbar {
+            background: #1a1a1a;
+            border-bottom: 1px solid #2a2a2a;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .content {
+            padding: 40px;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        h2 {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 24px;
+        }
+        .card:hover {
+            border-color: #667eea;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .card-name {
+            font-size: 1.2em;
+            font-weight: 600;
+        }
+        .badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            background: #4ade80;
+            color: #000;
+        }
+        table {
+            width: 100%;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        th {
+            background: #0a0a0a;
+            padding: 16px;
+            text-align: left;
+            font-size: 0.85em;
+            color: #888;
+        }
+        td {
+            padding: 16px;
+            border-top: 1px solid #2a2a2a;
+        }
+        tr:hover {
+            background: #2a2a2a;
+        }
+        .btn {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .btn:hover { opacity: 0.8; }
+        .btn-secondary {
+            background: #2a2a2a;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo">PromptDev</div>
+        <div class="nav-item active" onclick="showView('dashboard')">Dashboard</div>
+        <div class="nav-item" onclick="showView('personalities')">Personalities</div>
+        <div class="nav-item" onclick="showView('monitor')">Monitor</div>
+    </div>
+    
+    <div class="main">
+        <div class="topbar">
+            <h1 id="page-title">Dashboard</h1>
+            <button class="btn" onclick="location.href='editor.html'">+ New Personality</button>
+        </div>
+        
+        <div class="content">
+            <!-- Dashboard View -->
+            <div id="view-dashboard">
+                <div class="section">
+                    <h2>Active Personalities</h2>
+                    <div class="cards" id="personalities-list"></div>
+                </div>
+                
+                <div class="section">
+                    <h2>Recent Conversations</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>USER ID</th>
+                                <th>MESSAGES</th>
+                                <th>LAST ACTIVITY</th>
+                                <th>ACTIONS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table"></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Personalities View -->
+            <div id="view-personalities" style="display: none;">
+                <div class="section">
+                    <div class="cards" id="all-personalities"></div>
+                </div>
+            </div>
+            
+            <!-- Monitor View -->
+            <div id="view-monitor" style="display: none;">
+                <div class="section">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>USER ID</th>
+                                <th>MESSAGES</th>
+                                <th>LAST ACTIVITY</th>
+                                <th>ACTIONS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="monitor-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';
+
+        function showView(view) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.querySelectorAll('[id^="view-"]').forEach(el => el.style.display = 'none');
+            document.getElementById('view-' + view).style.display = 'block';
+            
+            const titles = {dashboard: 'Dashboard', personalities: 'Personalities', monitor: 'Live Monitor'};
+            document.getElementById('page-title').textContent = titles[view];
+            
+            if (view === 'personalities') loadAllPersonalities();
+            if (view === 'monitor') loadMonitor();
+        }
+
+        async function loadPersonalities() {
+            const res = await fetch(API + '/admin/templates');
+            const data = await res.json();
+            const list = document.getElementById('personalities-list');
+            list.innerHTML = data.templates.map(t => `
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-name">${t.name}</div>
+                            <div style="color: #666; font-size: 0.85em;">v${t.version}</div>
+                        </div>
+                        <span class="badge">LIVE</span>
+                    </div>
+                    <button class="btn" onclick="location.href='editor.html?id=${t.id}'">Edit</button>
+                    <button class="btn btn-secondary" onclick="viewHistory(${t.id})">History</button>
+                </div>
+            `).join('');
+        }
+
+        async function loadAllPersonalities() {
+            const res = await fetch(API + '/admin/templates');
+            const data = await res.json();
+            const list = document.getElementById('all-personalities');
+            list.innerHTML = data.templates.map(t => `
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-name">${t.name}</div>
+                            <div style="color: #666; font-size: 0.85em;">v${t.version} • Updated ${new Date(t.updated_at).toLocaleDateString()}</div>
+                        </div>
+                        <span class="badge">LIVE</span>
+                    </div>
+                    <div style="margin: 16px 0;">
+                        <button class="btn" onclick="location.href='editor.html?id=${t.id}'">Edit</button>
+                        <button class="btn btn-secondary" onclick="viewHistory(${t.id})">Versions</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadUsers() {
+            const res = await fetch(API + '/admin/users');
+            const data = await res.json();
+            const table = document.getElementById('users-table');
+            table.innerHTML = data.users.slice(0, 10).map(u => `
+                <tr>
+                    <td style="font-family: monospace; color: #667eea;">${u.user_id}</td>
+                    <td>${u.message_count}</td>
+                    <td>${new Date(u.last_activity).toLocaleString()}</td>
+                    <td><button class="btn" onclick="location.href='monitor.html?user=${u.user_id}'">View</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadMonitor() {
+            const res = await fetch(API + '/admin/users');
+            const data = await res.json();
+            const table = document.getElementById('monitor-table');
+            table.innerHTML = data.users.map(u => `
+                <tr>
+                    <td style="font-family: monospace; color: #667eea;">${u.user_id}</td>
+                    <td>${u.message_count}</td>
+                    <td>${new Date(u.last_activity).toLocaleString()}</td>
+                    <td><button class="btn" onclick="location.href='monitor.html?user=${u.user_id}'">Monitor</button></td>
+                </tr>
+            `).join('');
+        }
+
+        function viewHistory(id) {
+            location.href = `editor.html?id=${id}&tab=history`;
+        }
+
+        loadPersonalities();
+        loadUsers();
+        setInterval(() => {
+            loadUsers();
+        }, 5000);
+    </script>
+</body>
+</html>

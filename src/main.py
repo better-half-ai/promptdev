@@ -96,6 +96,7 @@ async def root():
     return RedirectResponse(url="/static/dashboard.html")
 
 
+
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # MODELS
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -545,6 +546,109 @@ async def list_users():
         put_conn(conn)
 
 
+@app.get("/admin/conversations/export")
+async def export_conversation(user_id: str = Query(...)):
+    """Export conversation as JSON download."""
+    messages = get_conversation_history(user_id)
+    state = get_user_state(user_id)
+    all_memory = get_all_memory(user_id)
+    
+    export_data = {
+        "user_id": user_id,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "state": state.mode if state else None,
+        "memory": {mem.key: mem.value for mem in all_memory},
+        "messages": [
+            {
+                "id": msg.id,
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat()
+            }
+            for msg in messages
+        ]
+    }
+    
+    return JSONResponse(
+        content=export_data,
+        headers={
+            "Content-Disposition": f"attachment; filename=conversation_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+        }
+    )
+
+
+@app.get("/admin/conversations/live")
+async def get_live_conversations():
+    """Get real-time list of active conversations with quality scores."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Get users with recent activity (last 24 hours)
+            cur.execute("""
+                WITH recent_activity AS (
+                    SELECT 
+                        ch.user_id,
+                        COUNT(*) as message_count,
+                        MAX(ch.created_at) as last_activity,
+                        COUNT(CASE WHEN ch.role = 'user' THEN 1 END) as user_messages,
+                        COUNT(CASE WHEN ch.role = 'assistant' THEN 1 END) as assistant_messages
+                    FROM conversation_history ch
+                    WHERE ch.created_at >= NOW() - INTERVAL '24 hours'
+                    GROUP BY ch.user_id
+                ),
+                user_stats AS (
+                    SELECT 
+                        user_id,
+                        AVG(response_time_ms) as avg_response_time,
+                        COUNT(*) FILTER (WHERE error IS NOT NULL)::FLOAT / NULLIF(COUNT(*), 0) * 100 as error_rate
+                    FROM llm_requests
+                    WHERE created_at >= NOW() - INTERVAL '24 hours'
+                    GROUP BY user_id
+                )
+                SELECT 
+                    ra.user_id,
+                    ra.message_count,
+                    ra.last_activity,
+                    ra.user_messages,
+                    ra.assistant_messages,
+                    us.mode as state,
+                    COALESCE(ust.avg_response_time, 0) as avg_response_time,
+                    COALESCE(ust.error_rate, 0) as error_rate
+                FROM recent_activity ra
+                LEFT JOIN user_state us ON ra.user_id = us.user_id
+                LEFT JOIN user_stats ust ON ra.user_id = ust.user_id
+                ORDER BY ra.last_activity DESC
+                LIMIT 50
+            """)
+            
+            conversations = []
+            for row in cur.fetchall():
+                # Calculate quality score (0-100)
+                # Higher score = good (balanced messages, low errors, active)
+                msg_balance = min(row[3], row[4]) / max(row[3], row[4]) if max(row[3], row[4]) > 0 else 0
+                error_penalty = (100 - row[7]) / 100  # Lower errors = higher score
+                quality_score = int((msg_balance * 50) + (error_penalty * 50))
+                
+                conversations.append({
+                    "user_id": row[0],
+                    "message_count": row[1],
+                    "last_activity": row[2].isoformat(),
+                    "user_messages": row[3],
+                    "assistant_messages": row[4],
+                    "state": row[5] or "active",
+                    "avg_response_time_ms": int(row[6]),
+                    "error_rate_percent": float(row[7]),
+                    "quality_score": quality_score
+                })
+            
+            return {
+                "count": len(conversations),
+                "conversations": conversations
+            }
+    finally:
+        put_conn(conn)
+
+
 @app.get("/admin/conversations/{user_id}")
 async def get_user_conversation(user_id: str):
     """Get conversation history for any user (admin view)."""
@@ -567,35 +671,104 @@ async def get_user_conversation(user_id: str):
     }
 
 
-@app.get("/admin/conversations/export")
-async def export_conversation(user_id: str = Query(...)):
-    """Export conversation as JSON download."""
-    messages = get_conversation_history(user_id)
-    state = get_user_state(user_id)
-    all_memory = get_all_memory(user_id)
-    
-    export_data = {
-        "user_id": user_id,
-        "exported_at": datetime.now(UTC).isoformat(),
-        "state": state.mode if state else None,
-        "memory": all_memory,
-        "messages": [
-            {
-                "id": msg.id,
-                "role": msg.role,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat()
+@app.get("/admin/conversations/{user_id}/metrics")
+async def get_user_metrics(user_id: str):
+    """Get engagement and quality metrics for a specific user."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Message engagement metrics
+            cur.execute("""
+                SELECT 
+                    COUNT(*) as total_messages,
+                    COUNT(DISTINCT DATE(created_at)) as active_days,
+                    COUNT(CASE WHEN role = 'user' THEN 1 END) as user_messages,
+                    COUNT(CASE WHEN role = 'assistant' THEN 1 END) as assistant_messages,
+                    MIN(created_at) as first_message,
+                    MAX(created_at) as last_message,
+                    AVG(LENGTH(content)) FILTER (WHERE role = 'assistant') as avg_response_length
+                FROM conversation_history
+                WHERE user_id = %s
+            """, (user_id,))
+            
+            row = cur.fetchone()
+            if not row or row[0] == 0:
+                raise HTTPException(status_code=404, detail=f"No conversation data found for user {user_id}")
+            
+            total_msgs = row[0]
+            active_days = row[1]
+            user_msgs = row[2]
+            assistant_msgs = row[3]
+            first_msg = row[4]
+            last_msg = row[5]
+            avg_length = int(row[6]) if row[6] else 0
+            
+            # LLM performance metrics
+            cur.execute("""
+                SELECT 
+                    AVG(response_time_ms) FILTER (WHERE error IS NULL) as avg_response_time,
+                    COUNT(*) FILTER (WHERE error IS NOT NULL)::FLOAT / NULLIF(COUNT(*), 0) * 100 as error_rate,
+                    COUNT(*) as total_requests
+                FROM llm_requests
+                WHERE user_id = %s
+            """, (user_id,))
+            
+            row = cur.fetchone()
+            avg_response_time = int(row[0]) if row[0] else 0
+            error_rate = float(row[1]) if row[1] else 0.0
+            total_requests = row[2]
+            
+            # Calculate repetition score (simple heuristic)
+            cur.execute("""
+                WITH assistant_messages AS (
+                    SELECT content, COUNT(*) as occurrences
+                    FROM conversation_history
+                    WHERE user_id = %s AND role = 'assistant'
+                    GROUP BY content
+                    HAVING COUNT(*) > 1
+                )
+                SELECT 
+                    COUNT(*) as repeated_messages,
+                    SUM(occurrences) as total_repetitions
+                FROM assistant_messages
+            """, (user_id,))
+            
+            row = cur.fetchone()
+            repeated_msgs = row[0] if row[0] else 0
+            total_reps = row[1] if row[1] else 0
+            repetition_rate = (total_reps / assistant_msgs * 100) if assistant_msgs > 0 else 0.0
+            
+            # Quality score calculation
+            msg_balance = min(user_msgs, assistant_msgs) / max(user_msgs, assistant_msgs) if max(user_msgs, assistant_msgs) > 0 else 0
+            error_penalty = (100 - error_rate) / 100
+            repetition_penalty = max(0, (100 - repetition_rate) / 100)
+            quality_score = int((msg_balance * 40) + (error_penalty * 30) + (repetition_penalty * 30))
+            
+            return {
+                "user_id": user_id,
+                "engagement": {
+                    "total_messages": total_msgs,
+                    "user_messages": user_msgs,
+                    "assistant_messages": assistant_msgs,
+                    "active_days": active_days,
+                    "first_message": first_msg.isoformat() if first_msg else None,
+                    "last_message": last_msg.isoformat() if last_msg else None,
+                    "avg_response_length": avg_length
+                },
+                "quality": {
+                    "avg_response_time_ms": avg_response_time,
+                    "error_rate_percent": error_rate,
+                    "repetition_rate_percent": round(repetition_rate, 2),
+                    "repeated_message_count": repeated_msgs,
+                    "quality_score": quality_score
+                },
+                "performance": {
+                    "total_llm_requests": total_requests,
+                    "message_balance_score": int(msg_balance * 100)
+                }
             }
-            for msg in messages
-        ]
-    }
-    
-    return JSONResponse(
-        content=export_data,
-        headers={
-            "Content-Disposition": f"attachment; filename=conversation_{user_id}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
-        }
-    )
+    finally:
+        put_conn(conn)
 
 
 @app.get("/admin/memory/{user_id}")

@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Template Management</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f7fa;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            font-size: 28px;
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .stats {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .stat-card {
+            text-align: center;
+            padding: 15px;
+            border-radius: 6px;
+            background: #f8f9fa;
+        }
+        
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        
+        .templates-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+        
+        .template-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 20px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+        
+        .template-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .template-card.inactive {
+            opacity: 0.6;
+            border: 2px dashed #e74c3c;
+        }
+        
+        .template-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+        
+        .template-name {
+            font-size: 20px;
+            font-weight: bold;
+            color: #2c3e50;
+            flex: 1;
+        }
+        
+        .template-status {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .status-active {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-inactive {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .template-meta {
+            font-size: 13px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }
+        
+        .template-meta div {
+            margin-bottom: 5px;
+        }
+        
+        .template-content-preview {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 100px;
+            overflow: hidden;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        
+        .template-content-preview::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 30px;
+            background: linear-gradient(transparent, #f8f9fa);
+        }
+        
+        .template-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-1px);
+        }
+        
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+        
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #229954;
+        }
+        
+        .btn-warning {
+            background: #f39c12;
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: #e67e22;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .modal-header h2 {
+            color: #2c3e50;
+        }
+        
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #7f8c8d;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 14px;
+        }
+        
+        .form-group textarea {
+            font-family: 'Courier New', monospace;
+            min-height: 200px;
+            resize: vertical;
+        }
+        
+        .message {
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .message.active {
+            display: block;
+        }
+        
+        .message.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .message.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .empty-state {
+            background: white;
+            padding: 60px;
+            border-radius: 8px;
+            text-align: center;
+            color: #7f8c8d;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+        
+        .filters {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .filters label {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .filters select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>📝 Template Management</h1>
+                <p style="margin-top: 10px; color: #7f8c8d;">Manage all system prompts and templates</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn-primary" onclick="showCreateModal()">+ Create New Template</button>
+                <button class="btn-secondary" onclick="window.location.href='/static/dashboard.html'">Back to Dashboard</button>
+            </div>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-total">-</div>
+                <div class="stat-label">Total Templates</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-active">-</div>
+                <div class="stat-label">Active Templates</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-inactive">-</div>
+                <div class="stat-label">Inactive Templates</div>
+            </div>
+        </div>
+
+        <div class="filters">
+            <label for="filter-status">Show:</label>
+            <select id="filter-status" onchange="filterTemplates()">
+                <option value="all">All Templates</option>
+                <option value="active" selected>Active Only</option>
+                <option value="inactive">Inactive Only</option>
+            </select>
+        </div>
+
+        <div id="templates-container" class="templates-grid"></div>
+    </div>
+
+    <!-- Create Template Modal -->
+    <div id="create-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Template</h2>
+                <button class="close-modal" onclick="closeModal('create-modal')">&times;</button>
+            </div>
+            <div id="create-message" class="message"></div>
+            <form onsubmit="createTemplate(event)">
+                <div class="form-group">
+                    <label>Template Name *</label>
+                    <input type="text" id="create-name" required placeholder="e.g., chatbot_v1">
+                </div>
+                <div class="form-group">
+                    <label>Template Content (Jinja2) *</label>
+                    <textarea id="create-content" required placeholder="You are {{role}}..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Created By *</label>
+                    <input type="text" id="create-by" required placeholder="Your name or ID">
+                </div>
+                <div class="form-group">
+                    <label>Initial Description</label>
+                    <input type="text" id="create-description" placeholder="Initial template creation">
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn-secondary" onclick="closeModal('create-modal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Create Template</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let allTemplates = [];
+
+        // Load templates on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTemplates();
+        });
+
+        function showMessage(elementId, type, message, duration = 5000) {
+            const msgEl = document.getElementById(elementId);
+            msgEl.className = `message ${type} active`;
+            msgEl.textContent = message;
+            if (duration > 0) {
+                setTimeout(() => {
+                    msgEl.classList.remove('active');
+                }, duration);
+            }
+        }
+
+        async function loadTemplates() {
+            try {
+                const response = await fetch('/admin/templates?include_inactive=true');
+                if (!response.ok) throw new Error('Failed to load templates');
+                
+                const data = await response.json();
+                allTemplates = data.templates;
+                
+                updateStats();
+                filterTemplates();
+            } catch (error) {
+                showMessage('message', 'error', `Error loading templates: ${error.message}`);
+            }
+        }
+
+        function updateStats() {
+            const total = allTemplates.length;
+            const active = allTemplates.filter(t => t.is_active).length;
+            const inactive = total - active;
+            
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('stat-active').textContent = active;
+            document.getElementById('stat-inactive').textContent = inactive;
+        }
+
+        function filterTemplates() {
+            const filter = document.getElementById('filter-status').value;
+            let filtered = allTemplates;
+            
+            if (filter === 'active') {
+                filtered = allTemplates.filter(t => t.is_active);
+            } else if (filter === 'inactive') {
+                filtered = allTemplates.filter(t => !t.is_active);
+            }
+            
+            renderTemplates(filtered);
+        }
+
+        function renderTemplates(templates) {
+            const container = document.getElementById('templates-container');
+            
+            if (templates.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1/-1;">
+                        <h3>No templates found</h3>
+                        <p>Create your first template to get started</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = templates.map(t => `
+                <div class="template-card ${t.is_active ? '' : 'inactive'}">
+                    <div class="template-header">
+                        <div class="template-name">${escapeHtml(t.name)}</div>
+                        <span class="template-status ${t.is_active ? 'status-active' : 'status-inactive'}">
+                            ${t.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                    </div>
+                    <div class="template-meta">
+                        <div><strong>ID:</strong> ${t.id}</div>
+                        <div><strong>Version:</strong> ${t.version}</div>
+                        <div><strong>Created:</strong> ${new Date(t.created_at).toLocaleDateString()}</div>
+                        <div><strong>Updated:</strong> ${new Date(t.updated_at).toLocaleDateString()}</div>
+                    </div>
+                    <div class="template-actions">
+                        <button class="btn-primary" onclick="editTemplate(${t.id})">
+                            ✏️ Edit
+                        </button>
+                        <button class="btn-secondary" onclick="viewHistory(${t.id})">
+                            📜 History
+                        </button>
+                        ${t.is_active ? 
+                            `<button class="btn-warning" onclick="deactivateTemplate(${t.id}, '${escapeHtml(t.name)}')">
+                                🚫 Deactivate
+                            </button>` :
+                            `<button class="btn-success" onclick="activateTemplate(${t.id}, '${escapeHtml(t.name)}')">
+                                ✅ Activate
+                            </button>`
+                        }
+                        <button class="btn-danger" onclick="deleteTemplate(${t.id}, '${escapeHtml(t.name)}')">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function showCreateModal() {
+            document.getElementById('create-modal').classList.add('active');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+
+        async function createTemplate(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('create-name').value;
+            const content = document.getElementById('create-content').value;
+            const createdBy = document.getElementById('create-by').value;
+            const description = document.getElementById('create-description').value;
+            
+            try {
+                const response = await fetch('/admin/templates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        content: content,
+                        created_by: createdBy
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to create template');
+                }
+                
+                showMessage('message', 'success', `Template "${name}" created successfully!`);
+                closeModal('create-modal');
+                document.querySelector('#create-modal form').reset();
+                await loadTemplates();
+            } catch (error) {
+                showMessage('create-message', 'error', error.message, 0);
+            }
+        }
+
+        function editTemplate(templateId) {
+            window.location.href = `/static/editor.html?id=${templateId}`;
+        }
+
+        function viewHistory(templateId) {
+            window.location.href = `/static/editor.html?id=${templateId}&tab=history`;
+        }
+
+        async function deactivateTemplate(templateId, templateName) {
+            if (!confirm(`Deactivate template "${templateName}"?\n\nThis will prevent it from being used in new chats.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/admin/templates/${templateId}/deactivate`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to deactivate template');
+                
+                showMessage('message', 'success', `Template "${templateName}" deactivated`);
+                await loadTemplates();
+            } catch (error) {
+                showMessage('message', 'error', `Error: ${error.message}`);
+            }
+        }
+
+        async function activateTemplate(templateId, templateName) {
+            try {
+                const response = await fetch(`/admin/templates/${templateId}/activate`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to activate template');
+                
+                showMessage('message', 'success', `Template "${templateName}" activated`);
+                await loadTemplates();
+            } catch (error) {
+                showMessage('message', 'error', `Error: ${error.message}`);
+            }
+        }
+
+        async function deleteTemplate(templateId, templateName) {
+            if (!confirm(`⚠️ PERMANENTLY DELETE template "${templateName}"?\n\nThis action cannot be undone!\nAll versions and history will be lost.\n\nAre you absolutely sure?`)) {
+                return;
+            }
+            
+            const confirmation = prompt(`Type "${templateName}" to confirm deletion:`);
+            if (confirmation !== templateName) {
+                showMessage('message', 'error', 'Deletion cancelled - name did not match');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/admin/templates/${templateId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to delete template');
+                
+                showMessage('message', 'success', `Template "${templateName}" permanently deleted`);
+                await loadTemplates();
+            } catch (error) {
+                showMessage('message', 'error', `Error: ${error.message}`);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
