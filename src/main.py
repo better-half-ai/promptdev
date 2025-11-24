@@ -87,12 +87,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for dashboard UI
+# Mount static files for dashboard
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", include_in_schema=False)
+@app.get("/")
 async def root():
-    """Redirect root to operator dashboard."""
+    """Redirect root to dashboard."""
     return RedirectResponse(url="/static/dashboard.html")
 
 
@@ -392,12 +392,7 @@ async def clear_history(user_id: str):
 @app.get("/admin/templates")
 async def list_all_templates(include_inactive: bool = Query(False)):
     """List all templates."""
-    templates = list_templates()
-    
-    # Filter by active status if needed
-    if not include_inactive:
-        templates = [t for t in templates if t.is_active]
-    
+    templates = list_templates(include_inactive=include_inactive)
     return {
         "count": len(templates),
         "templates": [
@@ -405,9 +400,9 @@ async def list_all_templates(include_inactive: bool = Query(False)):
                 "id": t.id,
                 "name": t.name,
                 "version": t.current_version,
-                "is_active": t.is_active,
                 "created_at": t.created_at.isoformat(),
-                "updated_at": t.updated_at.isoformat()
+                "updated_at": t.updated_at.isoformat(),
+                "is_active": t.is_active
             }
             for t in templates
         ]
@@ -449,24 +444,6 @@ async def get_template_by_name_endpoint(name: str):
         }
     except TemplateNotFoundError:
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
-
-
-@app.get("/admin/templates/id/{template_id}")
-async def get_template_by_id_endpoint(template_id: int):
-    """Get a specific template by ID."""
-    try:
-        template = get_template(template_id)
-        return {
-            "id": template.id,
-            "name": template.name,
-            "content": template.content,
-            "version": template.current_version,
-            "is_active": template.is_active,
-            "created_at": template.created_at.isoformat(),
-            "updated_at": template.updated_at.isoformat()
-        }
-    except TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
 
 
 @app.put("/admin/templates/{template_id}")
@@ -536,83 +513,6 @@ async def rollback_template_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/admin/templates/{template_id}/activate")
-async def activate_template(template_id: int):
-    """Activate a template."""
-    try:
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE templates SET is_active = TRUE WHERE id = %s RETURNING id",
-                    (template_id,)
-                )
-                if not cur.fetchone():
-                    raise TemplateNotFoundError(f"Template {template_id} not found")
-                conn.commit()
-        finally:
-            put_conn(conn)
-        
-        return {"template_id": template_id, "is_active": True}
-    except TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/admin/templates/{template_id}/deactivate")
-async def deactivate_template(template_id: int):
-    """Deactivate a template."""
-    try:
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE templates SET is_active = FALSE WHERE id = %s RETURNING id",
-                    (template_id,)
-                )
-                if not cur.fetchone():
-                    raise TemplateNotFoundError(f"Template {template_id} not found")
-                conn.commit()
-        finally:
-            put_conn(conn)
-        
-        return {"template_id": template_id, "is_active": False}
-    except TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.delete("/admin/templates/{template_id}")
-async def delete_template(template_id: int):
-    """Delete a template and all its versions."""
-    try:
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                # Delete versions first (foreign key constraint)
-                cur.execute(
-                    "DELETE FROM template_versions WHERE template_id = %s",
-                    (template_id,)
-                )
-                # Delete template
-                cur.execute(
-                    "DELETE FROM templates WHERE id = %s RETURNING id",
-                    (template_id,)
-                )
-                if not cur.fetchone():
-                    raise TemplateNotFoundError(f"Template {template_id} not found")
-                conn.commit()
-        finally:
-            put_conn(conn)
-        
-        return {"template_id": template_id, "deleted": True}
-    except TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # ADMIN: MONITORING ENDPOINTS
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -624,11 +524,14 @@ async def list_users():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT user_id, 
+                SELECT 
+                    ch.user_id, 
                     COUNT(*) as message_count,
-                    MAX(created_at) as last_activity
-                FROM conversation_history
-                GROUP BY user_id
+                    MAX(ch.created_at) as last_activity,
+                    COALESCE(us.mode, 'active') as state
+                FROM conversation_history ch
+                LEFT JOIN user_state us ON ch.user_id = us.user_id
+                GROUP BY ch.user_id, us.mode
                 ORDER BY last_activity DESC
             """)
             users = []
@@ -636,7 +539,8 @@ async def list_users():
                 users.append({
                     "user_id": row[0],
                     "message_count": row[1],
-                    "last_activity": row[2].isoformat()
+                    "last_activity": row[2].isoformat(),
+                    "state": row[3]
                 })
             return {
                 "count": len(users),
@@ -936,3 +840,49 @@ async def trigger_aggregation():
         return {"status": "success", "message": "Metrics aggregated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Aggregation failed: {e}")
+
+@app.post("/admin/templates/{template_id}/activate")
+async def activate_template_endpoint(template_id: int):
+    """Activate a template."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE system_prompt SET is_active = true, updated_at = NOW() WHERE id = %s",
+                (template_id,)
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Template not found")
+            conn.commit()
+        return {"message": "Template activated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        put_conn(conn)
+
+
+@app.post("/admin/templates/{template_id}/deactivate")
+async def deactivate_template_endpoint(template_id: int):
+    """Deactivate a template."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE system_prompt SET is_active = false, updated_at = NOW() WHERE id = %s",
+                (template_id,)
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Template not found")
+            conn.commit()
+        return {"message": "Template deactivated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        put_conn(conn)
+
