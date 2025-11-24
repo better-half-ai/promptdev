@@ -8,15 +8,12 @@ help:
 	@echo "╚════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "🖥️  MAC DEVELOPMENT (Native - Fastest)"
-	@echo "  make dev              Quick start with Venice 24B (14GB)"
-	@echo "  make dev-venice       Venice 24B - most uncensored (DEFAULT)"
-	@echo "  make dev-dolphin      Dolphin 7B - fast alternative (4.4GB)"
-	@echo "  make dev-mistral      Mistral 7B - baseline"
+	@echo "  make dev              Start with Dolphin 7B (4.4GB, default)"
+	@echo "  make dev-venice       Start with Venice 24B (14GB, best quality)"
 	@echo "  make dev-stop         Stop all Mac dev services"
 	@echo ""
 	@echo "☁️  CLOUD PRODUCTION (Docker - Ubuntu VM)"
-	@echo "  make prod             Deploy with Venice 24B (14GB, DEFAULT)"
-	@echo "  make prod-mistral     Deploy with Mistral 7B (4GB)"
+	@echo "  make prod             Deploy with Venice 24B (14GB)"
 	@echo "  make prod-stop        Stop all cloud services"
 	@echo "  make prod-logs        View production logs"
 	@echo ""
@@ -33,17 +30,30 @@ help:
 	@echo "  make health           Check backend health"
 	@echo "  make clean            Clean Python cache files"
 	@echo ""
-	@echo "💡 DEFAULT SETUP:"
-	@echo "  Mac Dev:  Venice 24B (14GB) - Most uncensored"
-	@echo "  Cloud:    Venice 24B (14GB) - Most uncensored"
+	@echo "💡 MODELS:"
+	@echo "  Mac:   Dolphin 7B (default) or Venice 24B (optional)"
+	@echo "  Cloud: Venice 24B (always)"
 	@echo ""
 
 # ============================================================================
 # MAC DEVELOPMENT (Native llama.cpp - Apple Silicon optimized)
 # ============================================================================
 
-dev: dev-venice
-	@echo "✅ Mac development environment ready!"
+dev:
+	@echo "🖥️  Starting Mac Development with Dolphin 7B..."
+	@echo ""
+	@docker compose up -d postgres backend
+	@echo "Waiting for backend..."
+	@sleep 3
+	@$(MAKE) db-migrate
+	@echo ""
+	@echo "Starting Dolphin 7B (native)..."
+	@bash scripts/run_mistral_local.sh dolphin &
+	@echo ""
+	@echo "✅ Mac Dev Ready:"
+	@echo "  Backend: http://localhost:8001"
+	@echo "  LLM: http://localhost:8080"
+	@echo "  Model: Dolphin 7B (4.4GB)"
 
 dev-venice:
 	@echo "🖥️  Starting Mac Development with Venice 24B..."
@@ -59,32 +69,7 @@ dev-venice:
 	@echo "✅ Mac Dev Ready:"
 	@echo "  Backend: http://localhost:8001"
 	@echo "  LLM: http://localhost:8080"
-	@echo "  Model: Venice 24B (14GB, most uncensored)"
-
-dev-dolphin:
-	@echo "🖥️  Starting Mac Development with Dolphin 7B..."
-	@docker compose up -d postgres backend
-	@sleep 3
-	@$(MAKE) db-migrate
-	@echo ""
-	@echo "Starting Dolphin 7B (native, fast)..."
-	@bash scripts/run_mistral_local.sh dolphin &
-	@echo ""
-	@echo "✅ Mac Dev Ready:"
-	@echo "  Backend: http://localhost:8001"
-	@echo "  LLM: http://localhost:8080"
-	@echo "  Model: Dolphin 7B (4.4GB, fast alternative)"
-
-dev-mistral:
-	@echo "🖥️  Starting Mac Development with Mistral 7B..."
-	@docker compose up -d postgres backend
-	@sleep 3
-	@$(MAKE) db-migrate
-	@bash scripts/run_mistral_local.sh mistral &
-	@echo "✅ Mac Dev Ready:"
-	@echo "  Backend: http://localhost:8001"
-	@echo "  LLM: http://localhost:8080"
-	@echo "  Model: Dolphin 7B (uncensored, 4.4GB)"
+	@echo "  Model: Venice 24B (14GB)"
 
 dev-stop:
 	@echo "Stopping Mac development services..."
@@ -98,11 +83,7 @@ dev-stop:
 
 prod:
 	@echo "☁️  Deploying to PRODUCTION with Venice 24B..."
-	@bash deploy.sh venice
-
-prod-mistral:
-	@echo "☁️  Deploying to PRODUCTION with Mistral 7B..."
-	@bash deploy.sh mistral
+	@bash deploy.sh
 
 prod-stop:
 	@echo "Stopping production services..."
@@ -156,4 +137,4 @@ rebuild:
 	@uv sync
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-venice dev-mistral dev-dolphin dev-stop prod prod-mistral prod-stop prod-logs prod-restart db-migrate db-inspect db-shell test test-verbose health clean rebuild
+.PHONY: help dev dev-venice dev-stop prod prod-stop prod-logs prod-restart db-migrate db-inspect db-shell test test-verbose health clean rebuild

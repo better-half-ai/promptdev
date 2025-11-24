@@ -41,9 +41,30 @@ services:
       postgres:
         condition: service_healthy
 
+  mistral:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: promptdev-mistral
+    profiles:
+      - cloud
+    volumes:
+      - promptdev-models:/models
+    ports:
+      - "8080:8080"
+    networks:
+      - promptdev-net
+    command: >
+      --server
+      --host 0.0.0.0
+      --port 8080
+      --model /models/venice.gguf
+      --threads 4
+      --ctx-size 8192
+    restart: unless-stopped
+
 networks:
   promptdev-net:
     driver: bridge
 
 volumes:
   postgres_data:
+  promptdev-models:
