@@ -20,7 +20,8 @@ ENV/
 htmlcov/
 
 # Database
-*.sql
+/*.sql
+!/migrations/*.sql
 pgdata/
 *.db
 
