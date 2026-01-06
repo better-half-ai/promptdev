@@ -1,0 +1,32 @@
+# Models (run natively, not in Docker)
+models/
+src/models/
+*.gguf
+
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Tests
+tests/
+.pytest_cache/
+
+# Build artifacts
+*.tar.gz
+uv.lock
+
+# Docs
+docs/
+README.md
