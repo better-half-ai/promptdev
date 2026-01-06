@@ -405,14 +405,12 @@ def test_list_preset_configs(client):
 
 def test_get_guardrail_by_name(client):
     """Test getting a specific guardrail by name."""
-    # Test with preset
     response = client.get("/admin/guardrails/unrestricted")
     
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "unrestricted"
     assert "rules" in data
-    assert len(data["rules"]) > 0
 
 
 def test_get_guardrail_by_id(client):

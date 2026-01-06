@@ -10,6 +10,20 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--llm",
+        action="store",
+        default="local",
+        help="LLM backend: 'local' or 'venice'"
+    )
+
+
+@pytest.fixture(scope="session")
+def llm_backend(request):
+    return request.config.getoption("--llm")
+
+
 @pytest.fixture(scope="session")
 def postgres_container():
     with PostgresContainer("postgres:16", username="test_user", password="test_pass", dbname="test_db") as postgres:
@@ -38,13 +52,12 @@ def test_db(postgres_container, migrations_dir):
         password=os.environ["TEST_DB_PASSWORD"],
         database=os.environ["TEST_DB_NAME"],
     )
-    for migration in ["001_init.sql", "002_prompts_schema.sql"]:
-        migration_file = migrations_dir / migration
-        if migration_file.exists():
-            with migration_file.open("r") as f:
-                with conn.cursor() as cur:
-                    cur.execute(f.read())
-            conn.commit()
+    # Run ALL migrations in sorted order
+    for migration in sorted(migrations_dir.glob("*.sql")):
+        with migration.open("r") as f:
+            with conn.cursor() as cur:
+                cur.execute(f.read())
+        conn.commit()
     conn.close()
     yield
 
@@ -75,24 +88,36 @@ def db_module(postgres_container, test_db):
     )
     
     # Patch get_config to return test config
-    original_get_config = src.config.get_config
     src.config._config = test_config
+    
+    # Truncate user data tables at START of each test (preserves presets)
+    # Keep: guardrail_configs (has migration preset data)
+    preserve_tables = {'guardrail_configs'}
+    conn = psycopg2.connect(
+        host=os.environ["TEST_DB_HOST"],
+        port=int(os.environ["TEST_DB_PORT"]),
+        user=os.environ["TEST_DB_USER"],
+        password=os.environ["TEST_DB_PASSWORD"],
+        database=os.environ["TEST_DB_NAME"],
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT tablename FROM pg_tables 
+                WHERE schemaname = 'public'
+            """)
+            tables = [row[0] for row in cur.fetchall()]
+            for table in tables:
+                if table not in preserve_tables:
+                    cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+        conn.commit()
+    finally:
+        conn.close()
     
     yield db_module
     
-    # Cleanup
+    # Cleanup - just reset the pool
     if db_module._pool:
-        conn = db_module.get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE conversation_history CASCADE")
-                cur.execute("TRUNCATE TABLE user_memory CASCADE")
-                cur.execute("TRUNCATE TABLE user_state CASCADE")
-                cur.execute("TRUNCATE TABLE system_prompt RESTART IDENTITY CASCADE")
-                cur.execute("TRUNCATE TABLE prompt_version_history CASCADE")
-            conn.commit()
-        finally:
-            db_module.put_conn(conn)
         db_module._pool = None
     
     # Restore original config
