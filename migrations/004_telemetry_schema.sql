@@ -1,46 +1,39 @@
--- Telemetry schema for metrics collection and aggregation
+-- Telemetry tables for LLM request logging and metrics
 
--- Raw LLM request events (append-only log)
 CREATE TABLE IF NOT EXISTS llm_requests (
     id SERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    template_name TEXT,
-    response_time_ms INTEGER NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    template_name VARCHAR(255),
+    response_time_ms INTEGER,
     request_tokens INTEGER,
     response_tokens INTEGER,
     total_tokens INTEGER,
     error TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_llm_requests_created 
-    ON llm_requests (created_at DESC);
+CREATE TABLE IF NOT EXISTS user_activity (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) UNIQUE NOT NULL,
+    total_messages INTEGER DEFAULT 0,
+    total_errors INTEGER DEFAULT 0,
+    first_seen TIMESTAMP DEFAULT NOW(),
+    last_seen TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW()
+);
 
-CREATE INDEX IF NOT EXISTS idx_llm_requests_user 
-    ON llm_requests (user_id, created_at DESC);
-
--- Aggregated metrics cache (updated periodically)
 CREATE TABLE IF NOT EXISTS metric_snapshots (
     id SERIAL PRIMARY KEY,
-    metric_name TEXT NOT NULL,
-    time_window TEXT NOT NULL,
-    window_start TIMESTAMPTZ NOT NULL,
-    value JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metric_name VARCHAR(255) NOT NULL,
+    time_window VARCHAR(50),
+    window_start TIMESTAMP,
+    value JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(metric_name, time_window, window_start)
 );
 
-CREATE INDEX IF NOT EXISTS idx_metric_snapshots_lookup
-    ON metric_snapshots (metric_name, time_window, window_start DESC);
-
--- User activity tracking (lightweight)
-CREATE TABLE IF NOT EXISTS user_activity (
-    user_id TEXT PRIMARY KEY,
-    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    total_messages INTEGER NOT NULL DEFAULT 0,
-    total_errors INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_activity_last_seen
-    ON user_activity (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_requests_user_id ON llm_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_llm_requests_created_at ON llm_requests(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_requests_template ON llm_requests(template_name);
+CREATE INDEX IF NOT EXISTS idx_user_activity_user_id ON user_activity(user_id);
+CREATE INDEX IF NOT EXISTS idx_metric_snapshots_name ON metric_snapshots(metric_name);
