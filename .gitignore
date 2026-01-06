@@ -20,8 +20,7 @@ ENV/
 htmlcov/
 
 # Database
-/*.sql
-!/migrations/*.sql
+*.sql
 pgdata/
 *.db
 
@@ -41,10 +40,3 @@ Thumbs.db
 
 # Backups
 backup_*.sql
-
-# Large files / artifacts
-models/
-*.tar.gz
-*.gguf
-src/promptdev.egg-info/
-*.bk
