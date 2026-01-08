@@ -15,7 +15,6 @@ import pytest
 import psycopg2
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 from src.guardrails import (
     # CRUD functions
@@ -42,16 +41,12 @@ from src.guardrails import (
 # FIXTURES
 # ═══════════════════════════════════════════════════════════════════════
 
-@pytest.fixture(scope="session")
-def migrations_dir():
-    """Get migrations directory."""
-    root = Path(__file__).resolve().parent
-    return root
-
-
-@pytest.fixture(scope="session")
-def test_db(postgres_container, migrations_dir):
-    """Setup test database with migrations."""
+@pytest.fixture
+def db_connection(db_module):
+    """Use db_module from conftest, cleanup test configs after each test."""
+    yield db_module
+    
+    # Cleanup: delete non-preset configs, reset presets
     conn = psycopg2.connect(
         host=os.environ["TEST_DB_HOST"],
         port=int(os.environ["TEST_DB_PORT"]),
@@ -59,50 +54,15 @@ def test_db(postgres_container, migrations_dir):
         password=os.environ["TEST_DB_PASSWORD"],
         database=os.environ["TEST_DB_NAME"],
     )
-    
-    # Run all migrations
-    for migration in sorted(migrations_dir.glob("*.sql")):
-        with migration.open("r") as f:
-            with conn.cursor() as cur:
-                cur.execute(f.read())
+    try:
+        with conn.cursor() as cur:
+            # Delete non-preset configs
+            cur.execute("DELETE FROM guardrail_configs WHERE created_by IS NULL OR created_by != 'system'")
+            # Reset presets to original state
+            cur.execute("UPDATE guardrail_configs SET is_active = true WHERE created_by = 'system'")
         conn.commit()
-    
-    conn.close()
-    yield
-
-
-@pytest.fixture
-def db_connection(test_db, postgres_container):
-    """Provide a test database connection and patch guardrails module."""
-    import src.guardrails as guardrails_module
-    
-    # Create real connection to test DB
-    def mock_get_conn():
-        return psycopg2.connect(
-            host=os.environ["TEST_DB_HOST"],
-            port=int(os.environ["TEST_DB_PORT"]),
-            user=os.environ["TEST_DB_USER"],
-            password=os.environ["TEST_DB_PASSWORD"],
-            database=os.environ["TEST_DB_NAME"],
-        )
-    
-    def mock_put_conn(conn):
+    finally:
         conn.close()
-    
-    # Patch guardrails module
-    with patch.object(guardrails_module, 'get_conn', mock_get_conn):
-        with patch.object(guardrails_module, 'put_conn', mock_put_conn):
-            yield
-            
-            # Cleanup: truncate table between tests (but keep presets)
-            conn = mock_get_conn()
-            with conn.cursor() as cur:
-                # Delete non-preset configs (NULL or not 'system')
-                cur.execute("DELETE FROM guardrail_configs WHERE created_by IS NULL OR created_by != 'system'")
-                # Reset presets to original state
-                cur.execute("UPDATE guardrail_configs SET is_active = true WHERE created_by = 'system'")
-            conn.commit()
-            conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -3,25 +3,57 @@ import os
 from pathlib import Path
 import pytest
 import psycopg2
+import asyncio
 from testcontainers.postgres import PostgresContainer
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+# Load .env file for API keys
+load_dotenv(ROOT / ".env")
+
+LLM_BACKENDS = {
+    "local": "http://127.0.0.1:8080",
+    "venice": os.environ.get("VENICE_API_URL", "https://api.venice.ai/api/v1"),
+}
+
 
 def pytest_addoption(parser):
-    parser.addoption(
-        "--llm",
-        action="store",
-        default="local",
-        help="LLM backend: 'local' or 'venice'"
-    )
+    parser.addoption("--llm", action="store", default="local", help="LLM backend: 'local' or 'venice'")
 
 
 @pytest.fixture(scope="session")
 def llm_backend(request):
-    return request.config.getoption("--llm")
+    backend = request.config.getoption("--llm")
+    os.environ["LLM_BACKEND"] = backend
+    return backend
+
+
+@pytest.fixture(scope="session")
+def llm_url(llm_backend):
+    return LLM_BACKENDS.get(llm_backend, LLM_BACKENDS["local"])
+
+
+@pytest.fixture(scope="session")
+def mistral_available(llm_backend, llm_url):
+    from src.llm_client import health_check, ClientConfig, LLMBackend
+    
+    if llm_backend == "venice":
+        config = ClientConfig(
+            base_url=llm_url,
+            backend=LLMBackend.VENICE,
+            api_key=os.environ.get("VENICE_API_KEY", ""),
+            model=os.environ.get("VENICE_MODEL", "mistral-31-24b")
+        )
+    else:
+        config = ClientConfig(base_url=llm_url, backend=LLMBackend.LOCAL)
+    
+    try:
+        return asyncio.run(health_check(config))
+    except:
+        return False
 
 
 @pytest.fixture(scope="session")
@@ -52,7 +84,6 @@ def test_db(postgres_container, migrations_dir):
         password=os.environ["TEST_DB_PASSWORD"],
         database=os.environ["TEST_DB_NAME"],
     )
-    # Run ALL migrations in sorted order
     for migration in sorted(migrations_dir.glob("*.sql")):
         with migration.open("r") as f:
             with conn.cursor() as cur:
@@ -63,18 +94,17 @@ def test_db(postgres_container, migrations_dir):
 
 
 @pytest.fixture
-def db_module(postgres_container, test_db):
+def db_module(postgres_container, test_db, llm_url):
     import db.db as db_module
     import src.config
-    from src.config import Config, MistralConfig, DatabaseConfig, SecurityConfig
-    
-    # Reset pool
+    from src.config import Config, MistralConfig, TestMistralConfig, DatabaseConfig, SecurityConfig
+
     db_module._pool = None
-    
-    # Create testcontainer config
+
     test_config = Config(
         mode="test",
-        mistral=MistralConfig(url="http://localhost:8080"),
+        mistral=MistralConfig(url=llm_url),
+        test_mistral=TestMistralConfig(url=llm_url),
         database=DatabaseConfig(
             host=os.environ["TEST_DB_HOST"],
             port=int(os.environ["TEST_DB_PORT"]),
@@ -86,12 +116,9 @@ def db_module(postgres_container, test_db):
         test_database=None,
         security=SecurityConfig()
     )
-    
-    # Patch get_config to return test config
+
     src.config._config = test_config
-    
-    # Truncate user data tables at START of each test (preserves presets)
-    # Keep: guardrail_configs (has migration preset data)
+
     preserve_tables = {'guardrail_configs'}
     conn = psycopg2.connect(
         host=os.environ["TEST_DB_HOST"],
@@ -102,10 +129,7 @@ def db_module(postgres_container, test_db):
     )
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT tablename FROM pg_tables 
-                WHERE schemaname = 'public'
-            """)
+            cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             tables = [row[0] for row in cur.fetchall()]
             for table in tables:
                 if table not in preserve_tables:
@@ -113,14 +137,11 @@ def db_module(postgres_container, test_db):
         conn.commit()
     finally:
         conn.close()
-    
+
     yield db_module
-    
-    # Cleanup - just reset the pool
+
     if db_module._pool:
         db_module._pool = None
-    
-    # Restore original config
     src.config._config = None
 
 

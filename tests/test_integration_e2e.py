@@ -4,11 +4,11 @@ END-TO-END INTEGRATION TESTS
 Tests the complete flow:
   User Request → Template Loading → Context Building → Guardrails → LLM Call → Response Storage → Telemetry
 
-NO MOCKS. Uses real Mistral LLM with pytest.skip when unavailable.
+NO MOCKS. Uses real LLM backend (local Mistral or Venice) via --llm flag.
+Run with: pytest --llm=venice tests/test_integration_e2e.py
 """
 
 import pytest
-import asyncio
 from fastapi.testclient import TestClient
 
 
@@ -16,14 +16,7 @@ from fastapi.testclient import TestClient
 # FIXTURES
 # ═══════════════════════════════════════════════════════════════════════
 
-@pytest.fixture(scope="session")
-def mistral_available():
-    """Check if Mistral is running."""
-    from src.llm_client import health_check
-    try:
-        return asyncio.run(health_check())
-    except:
-        return False
+# mistral_available fixture is now in conftest.py (uses --llm flag)
 
 
 @pytest.fixture

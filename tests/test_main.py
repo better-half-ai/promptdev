@@ -13,7 +13,6 @@ Tests cover:
 """
 
 import pytest
-import asyncio
 from fastapi.testclient import TestClient
 
 
@@ -21,14 +20,7 @@ from fastapi.testclient import TestClient
 # FIXTURES
 # ═══════════════════════════════════════════════════════════════════════════
 
-@pytest.fixture(scope="session")
-def mistral_available():
-    """Check if Mistral is running."""
-    from src.llm_client import health_check
-    try:
-        return asyncio.run(health_check())
-    except:
-        return False
+# mistral_available fixture is now in conftest.py (uses --llm flag)
 
 
 @pytest.fixture
@@ -385,10 +377,25 @@ def test_list_guardrail_configs(client):
 
 def test_list_guardrail_configs_with_inactive(client):
     """Test listing configs including inactive ones."""
+    # First deactivate a preset
+    client.put("/admin/guardrails/unrestricted", json={
+        "is_active": False
+    })
+    
+    # Without include_inactive, should not see deactivated
+    response_active = client.get("/admin/guardrails")
+    active_names = [c["name"] for c in response_active.json()["configs"]]
+    
+    # With include_inactive, should see all
     response = client.get("/admin/guardrails?include_inactive=true")
     
     assert response.status_code == 200
-    # Should return configs regardless of is_active status
+    data = response.json()
+    assert "configs" in data
+    assert "count" in data
+    all_names = [c["name"] for c in data["configs"]]
+    assert "unrestricted" in all_names  # Should appear with include_inactive
+    assert data["count"] >= len(active_names)  # Should have at least as many
 
 
 def test_list_preset_configs(client):
@@ -518,6 +525,9 @@ def test_chat_with_nonexistent_guardrail(client, sample_template):
     
     # Should fail during context building
     assert response.status_code == 500
+    data = response.json()
+    assert "detail" in data
+    assert "nonexistent" in data["detail"].lower() or "guardrail" in data["detail"].lower()
 
 
 def test_create_guardrail_with_invalid_rules(client):
@@ -531,6 +541,9 @@ def test_create_guardrail_with_invalid_rules(client):
     })
     
     assert response.status_code == 400
+    data = response.json()
+    assert "detail" in data
+    assert "type" in data["detail"].lower() or "invalid" in data["detail"].lower()
 
 
 def test_get_nonexistent_guardrail(client):
@@ -538,6 +551,8 @@ def test_get_nonexistent_guardrail(client):
     response = client.get("/admin/guardrails/nonexistent_config")
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_update_nonexistent_guardrail(client):
@@ -547,6 +562,8 @@ def test_update_nonexistent_guardrail(client):
     })
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_delete_nonexistent_guardrail(client):
@@ -554,6 +571,8 @@ def test_delete_nonexistent_guardrail(client):
     response = client.delete("/admin/guardrails/99999")
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -590,7 +609,11 @@ def test_get_user_statistics(client, sample_template, mistral_available):
     response = client.get("/admin/stats/users/stats_user")
     
     assert response.status_code == 200
-    # Stats structure depends on telemetry module implementation
+    data = response.json()
+    assert "user_id" in data
+    assert data["user_id"] == "stats_user"
+    assert "total_messages" in data
+    assert data["total_messages"] >= 1
 
 
 def test_get_user_statistics_not_found(client):
@@ -598,6 +621,8 @@ def test_get_user_statistics_not_found(client):
     response = client.get("/admin/stats/users/nonexistent_user")
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_trigger_aggregation(client):
@@ -647,6 +672,9 @@ def test_halt_blocks_chat(client, sample_template):
     })
     
     assert response.status_code == 423
+    data = response.json()
+    assert "detail" in data
+    assert "halted" in data["detail"].lower() or "blocked" in data["detail"].lower()
 
 
 def test_multiple_users_isolation(client, sample_template, mistral_available):
@@ -804,6 +832,8 @@ def test_chat_with_nonexistent_template(client, db_module):
     })
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_get_nonexistent_template(client):
@@ -811,6 +841,8 @@ def test_get_nonexistent_template(client):
     response = client.get("/admin/templates/nonexistent")
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_update_nonexistent_template(client):
@@ -821,6 +853,8 @@ def test_update_nonexistent_template(client):
     })
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 def test_resume_non_halted_conversation(client):
@@ -828,6 +862,8 @@ def test_resume_non_halted_conversation(client):
     response = client.post("/admin/interventions/user1/resume?operator=admin")
     
     assert response.status_code == 400
+    data = response.json()
+    assert "detail" in data
 
 
 def test_get_state_for_user_without_state(client):
@@ -835,6 +871,8 @@ def test_get_state_for_user_without_state(client):
     response = client.get("/admin/state/user1")
     
     assert response.status_code == 404
+    data = response.json()
+    assert "detail" in data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
