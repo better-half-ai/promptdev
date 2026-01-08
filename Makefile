@@ -1,5 +1,4 @@
 SHELL := /bin/bash
-PY := uv run python
 
 help:
 	@echo ""
@@ -7,19 +6,21 @@ help:
 	@echo "║                    PromptDev Commands                      ║"
 	@echo "╚════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "🖥️  DEVELOPMENT"
-	@echo "  make dev              Start backend + local Mistral"
-	@echo "  make dev-stop         Stop all dev services"
+	@echo "🚀 RUN"
+	@echo "  make run              Run with local Mistral backend"
+	@echo "  make run-venice       Run with Venice.ai API backend"
+	@echo "  make stop             Stop all services"
 	@echo ""
 	@echo "🗄️  DATABASE"
+	@echo "  make db-up            Start PostgreSQL"
 	@echo "  make db-migrate       Run migrations"
 	@echo "  make db-inspect       Show database tables"
 	@echo "  make db-shell         Open PostgreSQL shell"
 	@echo ""
 	@echo "🧪 TESTING"
-	@echo "  make test-local       Run tests with local Mistral"
+	@echo "  make test             Run tests with local backend"
 	@echo "  make test-venice      Run tests with Venice.ai API"
-	@echo "  make test-verbose     Run tests verbose (default: local)"
+	@echo "  make test-verbose     Run tests verbose (local)"
 	@echo ""
 	@echo "🔧 UTILITIES"
 	@echo "  make health           Check backend health"
@@ -27,76 +28,69 @@ help:
 	@echo ""
 
 # ============================================================================
-# DEVELOPMENT
+# RUN
 # ============================================================================
 
-dev:
-	@echo "🖥️  Starting development..."
-	@docker compose up -d postgres backend
-	@echo "Waiting for backend..."
-	@sleep 3
+run:
+	@docker compose up -d postgres
+	@sleep 2
 	@$(MAKE) db-migrate
-	@echo ""
-	@echo "Starting local Mistral..."
-	@bash scripts/run_mistral_local.sh &
-	@echo ""
-	@echo "✅ Dev Ready:"
-	@echo "  Backend: http://localhost:8001"
-	@echo "  LLM: http://localhost:8080"
+	@echo "Starting with local Mistral backend..."
+	@LLM_BACKEND=local uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
-dev-stop:
-	@echo "Stopping dev services..."
+run-venice:
+	@docker compose up -d postgres
+	@sleep 2
+	@$(MAKE) db-migrate
+	@echo "Starting with Venice.ai API backend..."
+	@LLM_BACKEND=venice uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+stop:
 	@docker compose down
-	@pkill -f llama-server || true
+	@pkill -f "uvicorn src.main:app" || true
 	@echo "✅ Stopped"
 
 # ============================================================================
-# DATABASE OPERATIONS
+# DATABASE
 # ============================================================================
 
+db-up:
+	@docker compose up -d postgres
+
 db-migrate:
-	@docker compose exec backend uv run python -m scripts.migrate
+	@uv run python -m scripts.migrate
 
 db-inspect:
-	@echo "=== Database Tables ==="
-	@docker compose exec backend uv run python -c "from scripts.inspect_db import list_tables; tables = list_tables(); print('\n'.join(tables))"
+	@uv run python -c "from scripts.inspect_db import list_tables; tables = list_tables(); print('\n'.join(tables))"
 
 db-shell:
-	@docker compose exec postgres psql -U promptdev -d promptdev
+	@docker compose exec postgres psql -U promptdev_user -d promptdev_db
 
 # ============================================================================
 # TESTING
 # ============================================================================
 
-LLM ?= local
-
 test:
-	@uv run pytest --llm=$(LLM)
-
-test-verbose:
-	@uv run pytest -v --llm=$(LLM)
-
-test-local:
 	@uv run pytest --llm=local
 
 test-venice:
 	@uv run pytest --llm=venice
+
+test-verbose:
+	@uv run pytest --llm=local -v
 
 # ============================================================================
 # UTILITIES
 # ============================================================================
 
 health:
-	@curl -s http://localhost:8001/health || echo "❌ Backend not responding"
+	@curl -sf http://localhost:8000/health && echo "✅ Backend healthy" || echo "❌ Backend not responding"
 
 clean:
 	@find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.pyc" -delete 2>/dev/null || true
-	@echo "✅ Cleaned Python cache files"
-
-rebuild:
-	@docker compose build backend
-	@uv sync
+	@find . -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	@echo "✅ Cleaned"
 
 .DEFAULT_GOAL := help
-.PHONY: help dev dev-stop db-migrate db-inspect db-shell test test-verbose test-local test-venice health clean rebuild
+.PHONY: help run run-venice stop db-up db-migrate db-inspect db-shell test test-venice test-verbose health clean
