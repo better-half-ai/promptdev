@@ -26,6 +26,11 @@ class MistralConfig(BaseModel):
     url: str
 
 
+class VeniceConfig(BaseModel):
+    url: str
+    api_key: str | None = None  # injected from .env
+
+
 class TestMistralConfig(BaseModel):
     url: str
 
