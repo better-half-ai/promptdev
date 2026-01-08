@@ -40,3 +40,17 @@ Thumbs.db
 
 # Backups
 backup_*.sql
+
+# Backup files
+*.bk
+*.backup
+
+# Tarballs
+*.tar.gz
+
+# Build artifacts
+*.egg-info/
+src/*.egg-info/
+
+# Model files (large)
+models/
