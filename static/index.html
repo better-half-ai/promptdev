@@ -93,13 +93,17 @@
             flex-shrink: 0;
         }
 
-        input[type="text"] {
+        #input {
             flex: 1;
             padding: 12px 16px;
             border: 1px solid #ddd;
             border-radius: 24px;
             font-size: 1em;
             outline: none;
+            font-family: inherit;
+            resize: none;
+            max-height: 120px;
+            overflow-y: auto;
         }
 
         button {
@@ -131,7 +135,7 @@
     <div class="messages" id="messages"></div>
 
     <div class="input-area">
-        <input type="text" id="input" placeholder="Type your message here...">
+        <textarea id="input" placeholder="Type your message here..." rows="1"></textarea>
         <button id="send">Send</button>
     </div>
 
@@ -161,6 +165,7 @@
 
             addMessage("user", msg);
             input.value = "";
+            input.style.height = "auto";
             sendBtn.disabled = true;
 
             try {
@@ -186,10 +191,17 @@
 
         sendBtn.onclick = sendMessage;
         
-        input.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") {
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
                 sendMessage();
             }
+        });
+        
+        // Auto-resize textarea
+        input.addEventListener("input", () => {
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 120) + "px";
         });
 
         // Load history
