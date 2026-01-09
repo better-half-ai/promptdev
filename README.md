@@ -219,19 +219,9 @@ make db-migrate       # Run migrations
 ## Testing
 
 ```bash
-make test             # Run all 298 tests
+make test             # Run all tests
 make test-verbose     # Verbose output
 ```
-
-**Test breakdown:**
-- `test_llm_client.py`: 28 tests - HTTP client
-- `test_prompts.py`: 71 tests - Templates, versioning
-- `test_memory.py`: 45 tests - Conversations
-- `test_context.py`: 32 tests - Prompt assembly
-- `test_guardrails.py`: 38 tests - Safety rules
-- `test_main.py`: 52 tests - API endpoints
-- `test_telemetry.py`: 18 tests - Metrics
-- `test_integration_e2e.py`: 14 tests - Full flows
 
 All tests use real PostgreSQL via testcontainers (no mocks).
 
@@ -264,63 +254,3 @@ Full API reference: http://localhost:8001/docs
 
 ---
 
-## Configuration
-
-**config.toml:**
-```toml
-[llm]
-base_url = "http://mistral:8080"
-timeout = 120.0
-max_retries = 3
-
-[database]
-host = "postgres"
-port = 5432
-database = "promptdev"
-user = "promptdev"
-password = "promptdev"
-pool_size = 10
-```
-
----
-
-## Project Structure
-
-```
-promptdev/
-├── src/
-│   ├── main.py           # FastAPI app
-│   ├── prompts.py        # Template management
-│   ├── memory.py         # Conversation storage
-│   ├── context.py        # Prompt assembly
-│   ├── guardrails.py     # Safety rules
-│   ├── llm_client.py     # LLM client
-│   ├── telemetry.py      # Metrics
-│   └── config.py         # Config loader
-├── static/               # Dashboard HTML
-├── docs/                 # Documentation
-├── tests/                # 298 tests
-├── migrations/           # Database schema
-└── Makefile              # Commands
-```
-
----
-
-## Production Checklist
-
-**Required before production:**
-- [ ] Add authentication (JWT/API keys)
-- [ ] Add rate limiting
-- [ ] Enable HTTPS
-- [ ] Set up database backups
-- [ ] Configure monitoring
-- [ ] Secure environment variables
-- [ ] Set CORS to specific origins
-
----
-
-## Contributing
-
-1. All code changes require tests
-2. Tests must use real databases (no mocks)
-3. Run `make test` before committing
