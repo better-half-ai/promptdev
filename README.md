@@ -1,6 +1,30 @@
 # PromptDev
 
-Prompt engineering workbench for AI companion applications. Manage templates, monitor conversations, and intervene in real-time.
+Prompt engineering workbench for developing and operating AI companion personas. Provides template versioning, real-time conversation monitoring, and operator intervention capabilities.
+
+## Why PromptDev?
+
+When building AI companions, you need to:
+- Iterate on prompts rapidly
+- Monitor live conversations for safety/quality
+- Intervene when things go wrong
+
+PromptDev provides the infrastructure for this workflow.
+
+## Architecture
+
+**Two modes of operation:**
+
+| Mode | Database | LLM | Use Case |
+|------|----------|-----|----------|
+| Local Dev | PostgreSQL in Docker (`db=local`) | Mistral via llama.cpp (`llm=local`) | Offline development, no API costs |
+| Production | Supabase cloud (`db=remote`) | Venice.ai API (`llm=venice`) | Live deployment, real users |
+
+**Why two databases?** Local Docker PostgreSQL for development (fast, free, disposable). Supabase for production (managed, backed up, accessible from anywhere).
+
+**Why two LLMs?** Local Mistral for development (no API costs, works offline, ~4GB download). Venice.ai for production (faster, no GPU needed, pay-per-use).
+
+**No defaults:** Every command requires explicit `db=local|remote` and `llm=local|venice`. This prevents accidentally running production commands against local DB or vice versa.
 
 ## Documentation
 
@@ -9,46 +33,160 @@ Prompt engineering workbench for AI companion applications. Manage templates, mo
 
 ---
 
-## Setup
+## Quick Start
 
-### 1. Install Prerequisites
+### Prerequisites
 
-**Mac:** Install [Homebrew](https://brew.sh), then:
+**Mac:**
 ```bash
 brew install docker uv git make
 ```
 
-**Linux (Ubuntu/Debian):** Install [Docker](https://docs.docker.com/engine/install/), then:
+**Linux (Ubuntu/Debian):**
 ```bash
 sudo apt install -y docker.io docker-compose-v2 git make curl
 curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.bashrc
 ```
 
-### 2. Download and Start
+### Setup
 
 ```bash
 git clone https://github.com/better-half-ai/promptdev.git
 cd promptdev
-./setup_env.sh
-make dev
+cp .env.example .env
+# Edit .env with your credentials (see Configuration below)
+uv sync
 ```
 
-First run downloads the AI model (~4GB). This takes a few minutes.
+### Run
 
-### 3. Open Dashboard
+```bash
+# Local development (local Postgres + local LLM)
+make run db=local llm=local
 
-http://localhost:8001/
+# Production (Supabase + Venice.ai)
+make run db=remote llm=venice
+```
+
+### Access
+
+- **Dashboard:** http://localhost:8001/dashboard
+- **Chat UI:** http://localhost:8001/chat-ui
+- **API Docs:** http://localhost:8001/docs
 
 ---
 
-## Daily Use
+## Configuration
+
+### Environment Variables (.env)
 
 ```bash
-make dev              # Start (Mac)
-make dev-stop         # Stop (Mac)
-make prod             # Start (Linux/Cloud)
-make prod-stop        # Stop (Linux/Cloud)
-make help             # See all commands
+# Database - Local
+PROMPTDEV_USER_PASS=your_local_db_password
+
+# Database - Remote (Supabase)
+SUPABASE_PASSWORD=your_supabase_password
+
+# LLM - Venice.ai
+VENICE_API_KEY=your_venice_api_key
+VENICE_API_URL=https://api.venice.ai/api/v1
+VENICE_MODEL=mistral-31-24b
+
+# Admin Auth
+SESSION_SECRET_KEY=random_32_char_hex_string
+```
+
+### Database Options
+
+| Option | Description |
+|--------|-------------|
+| `db=local` | Local PostgreSQL in Docker |
+| `db=remote` | Supabase cloud PostgreSQL |
+
+### LLM Options
+
+| Option | Description |
+|--------|-------------|
+| `llm=local` | Local Mistral via llama.cpp (requires `make llm` first) |
+| `llm=venice` | Venice.ai API (requires `VENICE_API_KEY`) |
+
+---
+
+## Commands
+
+All commands require explicit `db=` and/or `llm=` parameters. No defaults.
+
+### Run
+
+```bash
+make run db=local llm=local      # Local dev
+make run db=local llm=venice     # Local DB + Venice API
+make run db=remote llm=venice    # Production (Supabase + Venice)
+make stop                        # Stop all services
+```
+
+### Database
+
+```bash
+make db-up                       # Start local PostgreSQL
+make db-reset                    # Nuke local DB and start fresh
+make db-migrate db=local         # Run migrations (local)
+make db-migrate db=remote        # Run migrations (Supabase)
+make db-shell db=local           # Open psql shell (local)
+make db-shell db=remote          # Open psql shell (Supabase)
+make db-inspect db=local llm=local   # Show tables
+```
+
+### Testing
+
+```bash
+make test llm=local              # Run tests with local LLM
+make test llm=venice             # Run tests with Venice API
+```
+
+### Admin
+
+```bash
+make admin-create db=remote user=admin   # Create admin user
+make health                              # Check backend health
+```
+
+---
+
+## Admin Authentication
+
+All `/admin/*` endpoints require authentication.
+
+### Setup Admin User
+
+```bash
+# Run migration first
+make db-migrate db=remote
+
+# Create admin user (will prompt for password)
+make admin-create db=remote user=admin
+```
+
+### Login
+
+1. Visit http://localhost:8001/login
+2. Enter username and password
+3. Session valid for 24 hours
+
+### API Authentication
+
+```bash
+# Login (sets cookie)
+curl -X POST http://localhost:8001/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "yourpassword"}' \
+  -c cookies.txt
+
+# Use cookie for admin requests
+curl http://localhost:8001/admin/users -b cookies.txt
+
+# Logout
+curl -X POST http://localhost:8001/admin/logout -b cookies.txt
 ```
 
 ---
@@ -57,116 +195,118 @@ make help             # See all commands
 
 ### Overview
 
-Open http://localhost:8001/ to see the dashboard with three sections in the sidebar:
+Open http://localhost:8001/dashboard (requires login)
+
+Sections:
 - **Dashboard** — Statistics (active users, messages, response times)
 - **Personalities** — Create and edit AI templates
 - **Monitor** — Watch conversations, intervene if needed
 
----
-
 ### Personalities (Templates)
 
-Templates define how the AI behaves. Each template has a name, content, and version number.
+Templates define how the AI behaves.
 
-#### Create a New Template
+**Create:**
+1. Click **Personalities** → **+ New Personality**
+2. Enter name, content, and your name
+3. Click **Create**
 
-1. Click **Personalities** in sidebar
-2. Click **+ New Personality**
-3. Enter a **Name** (e.g., "companion")
-4. Enter **Content** — the instructions for the AI:
-   ```
-   You are a helpful companion.
-   User context: {{user_context}}
-   ```
-5. Enter your name in **Created By**
-6. Click **Create**
+**Edit:**
+1. Click **Edit** on any template
+2. Make changes, add a note
+3. Click **Save Changes** (creates new version)
 
-#### Edit a Template
-
-1. Find the template in the list
-2. Click **Edit**
-3. Make changes in the editor
-4. Add a note describing your change
-5. Click **Save Changes**
-
-Every save creates a new version. Old versions are never lost.
-
-#### View Version History
-
-1. Click **History** on any template
-2. See all previous versions with timestamps
-3. Click **View Content** to see what changed
-4. Click **Rollback** to restore an old version
-
-#### Activate / Deactivate
-
-- **Active** templates (green badge) are used by the AI
-- **Inactive** templates (red badge) are saved but not used
-- Click **Deactivate** to turn off a template
-- Click **Activate** to turn it back on
-
-#### Delete a Template
-
-1. Click **Delete** (requires confirmation)
-2. Type the template name to confirm
-3. This is permanent — template and all versions are removed
-
----
+**Version History:**
+- Click **History** to see all versions
+- Click **Rollback** to restore old version
 
 ### Monitor (Conversations)
 
-Watch user conversations and intervene when needed.
+**View:** Click **Monitor** to see all users and conversations
 
-#### View Conversations
+**Halt:** Stop AI from responding (for review)
+- Click **Halt**, enter reason
+- User sees "Conversation paused"
 
-1. Click **Monitor** in sidebar
-2. See all users with message counts and status:
-   - 🟢 **Active** — AI is responding normally
-   - 🔴 **Halted** — AI is paused, awaiting review
-3. Click a user to see their full conversation
+**Resume:** Click **Resume** to restart AI responses
 
-#### Halt a Conversation
-
-Stop the AI from responding (for review or safety):
-
-1. Open a user's conversation
-2. Click **Halt**
-3. Enter a reason (e.g., "Reviewing content")
-4. User sees "Conversation paused" until you resume
-
-#### Resume a Conversation
-
-1. Open the halted conversation
-2. Click **Resume**
-3. AI begins responding again
-
-#### Inject a Message
-
-Add context or instructions mid-conversation:
-
-1. Open a user's conversation
-2. Click **Inject**
-3. Type your message (e.g., "User prefers formal tone")
-4. Click **Send**
-
-The message appears in the conversation. The AI sees it and adjusts.
-
-#### Export Conversation
-
-1. Open a user's conversation
-2. Click **Export**
-3. Downloads as JSON file
+**Inject:** Add context mid-conversation
+- Click **Inject**, type message, click **Send**
 
 ---
 
-### User Chat
+## Architecture
 
-End users access: http://localhost:8001/static/index.html
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Browser       │     │   Venice.ai     │
+│   Dashboard     │     │   (LLM API)     │
+└────────┬────────┘     └────────▲────────┘
+         │                       │
+    ┌────▼────────────────────────────┐
+    │         FastAPI Backend         │
+    │         localhost:8001          │
+    └────┬───────────────────────┬────┘
+         │                       │
+    ┌────▼────────┐        ┌────▼────────┐
+    │  Local      │   OR   │  Supabase   │
+    │  PostgreSQL │        │  PostgreSQL │
+    └─────────────┘        └─────────────┘
+```
 
-- Type message, press Enter or click Send
-- AI responds based on the active template
-- Scroll up to see history
-- Each user has their own conversation saved
+### Database Schema
+
+| Table | Purpose |
+|-------|---------|
+| `conversation_history` | All messages (user_id isolated) |
+| `user_memory` | Key-value storage (JSONB) |
+| `user_state` | Active/halted status, personality |
+| `system_prompt` | Templates (personas) |
+| `prompt_version_history` | Version audit trail |
+| `guardrail_configs` | Safety rules |
+| `llm_requests` | Request logs for telemetry |
+| `admin_users` | Dashboard authentication |
+
+---
+
+## API Examples
+
+### Chat
+
+```bash
+curl -X POST http://localhost:8001/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "user123", "message": "Hello!"}'
+```
+
+### Templates (requires auth)
+
+```bash
+# Create
+curl -X POST http://localhost:8001/admin/templates \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"name": "companion", "content": "You are helpful.", "created_by": "admin"}'
+
+# List
+curl http://localhost:8001/admin/templates -b cookies.txt
+```
+
+### Interventions (requires auth)
+
+```bash
+# Halt
+curl -X POST http://localhost:8001/admin/interventions/user123/halt \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"operator": "admin", "reason": "Review needed"}'
+
+# Resume
+curl -X POST "http://localhost:8001/admin/interventions/user123/resume?operator=admin" \
+  -b cookies.txt
+```
+
+Full API: http://localhost:8001/docs
 
 ---
 
@@ -174,83 +314,33 @@ End users access: http://localhost:8001/static/index.html
 
 | Problem | Solution |
 |---------|----------|
-| "command not found: brew" | Install Homebrew first: https://brew.sh |
-| "command not found: make" | Run `brew install make` (Mac) or `sudo apt install make` (Linux) |
-| Dashboard won't load | Run `make health` to check if backend is running |
-| AI not responding | Check that model finished downloading, restart with `make dev-stop && make dev` |
+| `db= is required` | All commands need explicit `db=local` or `db=remote` |
+| `llm= is required` | Test/run commands need `llm=local` or `llm=venice` |
+| 401 on admin routes | Login first at `/login` or via API |
+| Connection refused (Supabase) | Check `SUPABASE_PASSWORD` in `.env` |
+| Venice API errors | Check `VENICE_API_KEY` in `.env` |
+| Port 8001 in use | Run `make stop` or `lsof -ti :8001 \| xargs kill` |
 
 ---
 
-## Future Features
+## Development
 
-**Data Portability:** Bulk export/import for templates between local and remote. Currently only single-conversation export exists.
-
-**Other planned:** Post-generation filtering, competing objectives, perturbations, wellbeing metrics, A/B testing.
-
----
----
-
-# Appendix: Technical Reference
-
-*For developers and system administrators.*
-
----
-
-## Database
-
-### Schema
-- `conversation_history` - All messages
-- `user_memory` - Key-value storage (JSONB)
-- `user_state` - Active/halted status
-- `system_prompt` - Templates
-- `prompt_version_history` - Version audit
-- `guardrail_configs` - Safety rules
-- `llm_requests` - Request logs
-
-### Access
-```bash
-make db-shell         # Open PostgreSQL shell
-make db-inspect       # Show tables
-make db-migrate       # Run migrations
-```
-
----
-
-## Testing
+### Local LLM Setup
 
 ```bash
-make test             # Run all tests
-make test-verbose     # Verbose output
+# Download and start Mistral (first time takes ~10 min)
+make llm
+
+# Then in another terminal
+make run db=local llm=local
 ```
 
-All tests use real PostgreSQL via testcontainers (no mocks).
+### Running Tests
 
----
+Tests use testcontainers (real PostgreSQL, no mocks).
 
-## API Examples
-
-### Create Template
 ```bash
-curl -X POST http://localhost:8001/admin/templates \
-  -H "Content-Type: application/json" \
-  -d '{"name": "companion", "content": "You are a helpful companion.", "created_by": "admin"}'
+# Requires Docker running
+make test llm=local
+make test llm=venice
 ```
-
-### Send Chat Message
-```bash
-curl -X POST http://localhost:8001/chat \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "user123", "message": "Hello!"}'
-```
-
-### Halt Conversation
-```bash
-curl -X POST http://localhost:8001/admin/interventions/user123/halt \
-  -H "Content-Type: application/json" \
-  -d '{"operator": "admin", "reason": "Review needed"}'
-```
-
-Full API reference: http://localhost:8001/docs
-
----
-

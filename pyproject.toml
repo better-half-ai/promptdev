@@ -1,8 +1,9 @@
 [project]
 name = "promptdev"
 version = "0.1.0"
+description = "Prompt engineering workbench"
+readme = "README.md"
 requires-python = ">=3.11"
-
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -15,6 +16,8 @@ dependencies = [
     "testcontainers[postgres]>=4.13.3",
     "jinja2",
     "pytest-asyncio",
+    "bcrypt>=4.0.0",
+    "itsdangerous>=2.0.0",
 ]
 
 [build-system]
@@ -24,5 +27,6 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 filterwarnings = [
-    "ignore::DeprecationWarning:testcontainers.*",
+    "ignore::DeprecationWarning",
 ]
+addopts = "-v"
