@@ -92,15 +92,16 @@ def test_cleanup_isolates_tests(db_conn):
 
 def test_config_uses_testcontainer_settings(db_module):
     """Test that config.py correctly uses testcontainer settings."""
-    from src.config import get_config
+    from src.config import get_config, get_active_db_config
     
     config = get_config()
+    db_config = get_active_db_config()
     
-    # Should use test_database section with dynamic port from testcontainer
-    assert config.database.host == "localhost"
-    assert config.database.port == int(os.environ["TEST_DB_PORT"])
-    assert config.database.user == "test_user"
-    assert config.database.database == "test_db"
+    # Should use local database config (DB_TARGET=local set by conftest)
+    assert db_config.host == "localhost"
+    assert db_config.port == int(os.environ["TEST_DB_PORT"])
+    assert db_config.user == "test_user"
+    assert db_config.database == "test_db"
 
 
 def test_multiple_connections_work_independently(db_module):

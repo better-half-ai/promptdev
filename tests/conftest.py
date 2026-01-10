@@ -65,8 +65,9 @@ def postgres_container():
         os.environ["TEST_DB_PASSWORD"] = postgres.password
         os.environ["TEST_DB_NAME"] = postgres.dbname
         os.environ["USE_TEST_DB"] = "1"
+        os.environ["DB_TARGET"] = "local"  # Tests use local config pointing to testcontainer
         yield postgres
-        for key in ["TEST_DB_HOST", "TEST_DB_PORT", "TEST_DB_USER", "TEST_DB_PASSWORD", "TEST_DB_NAME", "USE_TEST_DB"]:
+        for key in ["TEST_DB_HOST", "TEST_DB_PORT", "TEST_DB_USER", "TEST_DB_PASSWORD", "TEST_DB_NAME", "USE_TEST_DB", "DB_TARGET"]:
             os.environ.pop(key, None)
 
 
@@ -97,21 +98,27 @@ def test_db(postgres_container, migrations_dir):
 def db_module(postgres_container, test_db, llm_url):
     import db.db as db_module
     import src.config
-    from src.config import Config, MistralConfig, TestMistralConfig, DatabaseConfig, SecurityConfig
+    from src.config import Config, MistralConfig, TestMistralConfig, DatabaseConfig, DatabaseTargetConfig, SecurityConfig
 
     db_module._pool = None
+
+    # Create test DB config - both local and remote point to testcontainer
+    test_db_config = DatabaseTargetConfig(
+        host=os.environ["TEST_DB_HOST"],
+        port=int(os.environ["TEST_DB_PORT"]),
+        user=os.environ["TEST_DB_USER"],
+        password=os.environ["TEST_DB_PASSWORD"],
+        database=os.environ["TEST_DB_NAME"],
+        max_connections=10
+    )
 
     test_config = Config(
         mode="test",
         mistral=MistralConfig(url=llm_url),
         test_mistral=TestMistralConfig(url=llm_url),
         database=DatabaseConfig(
-            host=os.environ["TEST_DB_HOST"],
-            port=int(os.environ["TEST_DB_PORT"]),
-            user=os.environ["TEST_DB_USER"],
-            password=os.environ["TEST_DB_PASSWORD"],
-            database=os.environ["TEST_DB_NAME"],
-            max_connections=10
+            local=test_db_config,
+            remote=test_db_config  # Both point to testcontainer for tests
         ),
         test_database=None,
         security=SecurityConfig()

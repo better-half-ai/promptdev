@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config import Config, MistralConfig, DatabaseConfig, SecurityConfig
+from src.config import Config, MistralConfig, DatabaseConfig, DatabaseTargetConfig, SecurityConfig
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -25,13 +25,21 @@ mode = "standalone"
 [mistral]
 url = "http://mistral:8080"
 
-[database]
+[database.local]
 host = "localhost"
 port = 5432
 user = "ybh_user"
 password = "ybh_dev_pass"
 database = "ybh_promptdev"
 max_connections = 10
+
+[database.remote]
+host = "remote.example.com"
+port = 5432
+user = "remote_user"
+password = "remote_pass"
+database = "remote_db"
+max_connections = 5
 
 [security]
 paseto_public_key = ""
@@ -44,12 +52,14 @@ paseto_public_key = ""
     assert cfg.mistral.url == "http://mistral:8080"
 
     assert isinstance(cfg.database, DatabaseConfig)
-    assert cfg.database.host == "localhost"
-    assert cfg.database.port == 5432
-    assert cfg.database.user == "ybh_user"
-    assert cfg.database.password == "ybh_dev_pass"
-    assert cfg.database.database == "ybh_promptdev"
-    assert cfg.database.max_connections == 10
+    assert cfg.database.local.host == "localhost"
+    assert cfg.database.local.port == 5432
+    assert cfg.database.local.user == "ybh_user"
+    assert cfg.database.local.password == "ybh_dev_pass"
+    assert cfg.database.local.database == "ybh_promptdev"
+    assert cfg.database.local.max_connections == 10
+
+    assert cfg.database.remote.host == "remote.example.com"
 
     assert isinstance(cfg.security, SecurityConfig)
     assert cfg.security.paseto_public_key == ""
@@ -62,13 +72,21 @@ mode = "gateway"
 [mistral]
 url = "http://mistral:8080"
 
-[database]
+[database.local]
 host = "localhost"
 port = 5432
 user = "ybh_user"
 password = "ybh_dev_pass"
 database = "ybh_promptdev"
 max_connections = 10
+
+[database.remote]
+host = "remote.example.com"
+port = 5432
+user = "remote_user"
+password = "remote_pass"
+database = "remote_db"
+max_connections = 5
 
 [security]
 paseto_public_key = "v4.public.DUMMY"
@@ -113,13 +131,21 @@ mode = "standalone"
 [mistral]
 url = "http://mistral:8080"
 
-[database]
+[database.local]
 host = "localhost"
 port = "not-an-int"
 user = "ybh_user"
 password = "ybh_dev_pass"
 database = "ybh_promptdev"
 max_connections = 10
+
+[database.remote]
+host = "remote.example.com"
+port = 5432
+user = "remote_user"
+password = "remote_pass"
+database = "remote_db"
+max_connections = 5
 
 [security]
 paseto_public_key = ""
