@@ -1,7 +1,7 @@
 import psycopg2
 import psycopg2.pool
 
-from src.config import get_config
+from src.config import get_active_db_config
 
 _pool: psycopg2.pool.SimpleConnectionPool | None = None
 
@@ -9,16 +9,16 @@ _pool: psycopg2.pool.SimpleConnectionPool | None = None
 def init_pool():
     global _pool
     if _pool is None:
-        cfg = get_config()
+        db_cfg = get_active_db_config()
 
         _pool = psycopg2.pool.SimpleConnectionPool(
             1,
-            cfg.database.max_connections,
-            host=cfg.database.host,
-            port=cfg.database.port,
-            user=cfg.database.user,
-            password=cfg.database.password,   # now correctly populated
-            database=cfg.database.database,
+            db_cfg.max_connections,
+            host=db_cfg.host,
+            port=db_cfg.port,
+            user=db_cfg.user,
+            password=db_cfg.password,
+            database=db_cfg.database,
         )
     return _pool
 
@@ -31,3 +31,11 @@ def get_conn():
 def put_conn(conn):
     if _pool:
         _pool.putconn(conn)
+
+
+def close_pool():
+    """Close the connection pool."""
+    global _pool
+    if _pool:
+        _pool.closeall()
+        _pool = None

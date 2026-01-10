@@ -20,7 +20,6 @@ PROJECT_ROOT = find_project_root()
 
 # ------------------------------------------------------------
 # Pydantic models
-# Secrets are NOT expected in TOML
 # ------------------------------------------------------------
 class MistralConfig(BaseModel):
     url: str
@@ -28,20 +27,25 @@ class MistralConfig(BaseModel):
 
 class VeniceConfig(BaseModel):
     url: str
-    api_key: str | None = None  # injected from .env
+    api_key: str | None = None
 
 
 class TestMistralConfig(BaseModel):
     url: str
 
 
-class DatabaseConfig(BaseModel):
+class DatabaseTargetConfig(BaseModel):
     host: str
     port: int
     user: str
-    password: str | None = None     # injected from .env
+    password: str | None = None
     database: str
     max_connections: int
+
+
+class DatabaseConfig(BaseModel):
+    local: DatabaseTargetConfig
+    remote: DatabaseTargetConfig
 
 
 class TestDatabaseConfig(BaseModel):
@@ -63,8 +67,7 @@ class Config(BaseModel):
 
 
 # ------------------------------------------------------------
-# Internal loader (production + tests)
-# Inject password from .env ONLY
+# Internal loader
 # ------------------------------------------------------------
 def _load_config_from(path: Path) -> Config:
     if not path.exists():
@@ -77,12 +80,17 @@ def _load_config_from(path: Path) -> Config:
 
     # Load secrets
     load_dotenv(PROJECT_ROOT / ".env")
-    pwd = os.environ.get("PROMPTDEV_USER_PASS")
-    if not pwd:
+    
+    # Local database password
+    local_pwd = os.environ.get("PROMPTDEV_USER_PASS")
+    if not local_pwd:
         raise RuntimeError("PROMPTDEV_USER_PASS missing in environment")
+    cfg.database.local.password = local_pwd
 
-    # Inject secret into proper model location
-    cfg.database.password = pwd
+    # Remote database password
+    remote_pwd = os.environ.get("SUPABASE_PASSWORD")
+    if remote_pwd:
+        cfg.database.remote.password = remote_pwd
 
     return cfg
 
@@ -106,3 +114,21 @@ def get_config() -> Config:
     if _config is None:
         _config = load_config()
     return _config
+
+
+def get_active_db_config() -> DatabaseTargetConfig:
+    """Returns the active database config based on DB_TARGET env var."""
+    cfg = get_config()
+    
+    db_target = os.environ.get("DB_TARGET")
+    if not db_target:
+        raise RuntimeError("DB_TARGET env var is required (local or remote)")
+    
+    if db_target == "local":
+        return cfg.database.local
+    elif db_target == "remote":
+        if not cfg.database.remote.password:
+            raise RuntimeError("SUPABASE_PASSWORD missing in environment")
+        return cfg.database.remote
+    else:
+        raise RuntimeError(f"Invalid DB_TARGET: {db_target}. Use 'local' or 'remote'")

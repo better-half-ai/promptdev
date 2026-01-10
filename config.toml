@@ -6,11 +6,18 @@ url = "http://host.docker.internal:8080"
 [test_mistral]
 url = "http://127.0.0.1:8080"
 
-[database]
+[database.local]
 host = "postgres"
 port = 5432
 user = "promptdev_user"
 database = "promptdev_db"
+max_connections = 10
+
+[database.remote]
+host = "aws-1-us-east-2.pooler.supabase.com"
+port = 5432
+user = "postgres.hykoamfsyttvteipvsbw"
+database = "postgres"
 max_connections = 10
 
 [test_database]
