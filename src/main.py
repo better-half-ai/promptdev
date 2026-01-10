@@ -21,7 +21,7 @@ from datetime import datetime, UTC
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel, Field
 
 # Import from other modules
@@ -87,13 +87,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for dashboard
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
+# Clean URL routes
 @app.get("/")
 async def root():
     """Redirect root to dashboard."""
-    return RedirectResponse(url="/static/dashboard.html")
+    return RedirectResponse(url="/dashboard")
+
+@app.get("/dashboard")
+async def dashboard():
+    return FileResponse("static/dashboard.html")
+
+@app.get("/chat-ui")
+async def chat_page():
+    return FileResponse("static/index.html")
+
+@app.get("/editor")
+async def editor():
+    return FileResponse("static/editor.html")
+
+@app.get("/live-editor")
+async def live_editor():
+    return FileResponse("static/live-editor.html")
+
+@app.get("/monitor")
+async def monitor():
+    return FileResponse("static/monitor.html")
+
+@app.get("/template-manager")
+async def template_manager():
+    return FileResponse("static/template-manager.html")
+
+# Mount static files for assets
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

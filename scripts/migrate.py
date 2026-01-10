@@ -8,7 +8,7 @@ import psycopg2
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.config import get_config
+from src.config import get_config, get_active_db_config
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
@@ -31,32 +31,34 @@ def get_migration_conn():
         )
     elif use_test:
         # Use test database from config (for manual test DB)
+        db_cfg = get_active_db_config()
         test_cfg = getattr(cfg, 'test_database', None)
         if test_cfg:
             return psycopg2.connect(
-                host=getattr(test_cfg, 'host', cfg.database.host),
-                port=getattr(test_cfg, 'port', cfg.database.port),
+                host=getattr(test_cfg, 'host', db_cfg.host),
+                port=getattr(test_cfg, 'port', db_cfg.port),
                 user=test_cfg.user,
-                password=cfg.database.password,
+                password=db_cfg.password,
                 database=test_cfg.database,
             )
         else:
-            # Fallback to production config with test DB name
+            # Fallback to active config with test DB name
             return psycopg2.connect(
-                host=cfg.database.host,
-                port=cfg.database.port,
-                user=cfg.database.user,
-                password=cfg.database.password,
+                host=db_cfg.host,
+                port=db_cfg.port,
+                user=db_cfg.user,
+                password=db_cfg.password,
                 database="promptdev_test",
             )
     else:
-        # Use production database configuration
+        # Use active database configuration (local or remote based on DB_TARGET)
+        db_cfg = get_active_db_config()
         return psycopg2.connect(
-            host=cfg.database.host,
-            port=cfg.database.port,
-            user=cfg.database.user,
-            password=cfg.database.password,
-            database=cfg.database.database,
+            host=db_cfg.host,
+            port=db_cfg.port,
+            user=db_cfg.user,
+            password=db_cfg.password,
+            database=db_cfg.database,
         )
 
 

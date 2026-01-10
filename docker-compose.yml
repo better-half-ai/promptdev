@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:15
     container_name: promptdev-postgres
+    profiles:
+      - local
     environment:
       POSTGRES_USER: promptdev_user
       POSTGRES_PASSWORD: ${PROMPTDEV_USER_PASS}
@@ -21,11 +23,16 @@ services:
   backend:
     build: .
     container_name: promptdev-backend
+    profiles:
+      - local
     environment:
       MODE: standalone
       CONFIG_PATH: /app/config.toml
+      DB_TARGET: local
       PROMPTDEV_USER_PASS: ${PROMPTDEV_USER_PASS}
       MISTRAL_URL: ${MISTRAL_URL:-http://host.docker.internal:8080}
+      LLM_BACKEND: ${LLM_BACKEND:-mistral}
+      VENICE_API_KEY: ${VENICE_API_KEY}
     volumes:
       - ./src:/app/src
       - ./static:/app/static
@@ -33,6 +40,7 @@ services:
       - ./migrations:/app/migrations
       - ./scripts:/app/scripts
       - ./db:/app/db
+      - ./.env:/app/.env
     ports:
       - "8001:8001"
     networks:
