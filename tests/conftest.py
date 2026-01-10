@@ -21,19 +21,23 @@ LLM_BACKENDS = {
 
 
 def pytest_addoption(parser):
-    parser.addoption("--llm", action="store", default="local", help="LLM backend: 'local' or 'venice'")
+    parser.addoption("--llm", action="store", help="LLM backend: 'local' or 'venice' (REQUIRED)")
 
 
 @pytest.fixture(scope="session")
 def llm_backend(request):
     backend = request.config.getoption("--llm")
+    if not backend:
+        pytest.exit("ERROR: --llm is required. Use --llm=local or --llm=venice", returncode=1)
+    if backend not in LLM_BACKENDS:
+        pytest.exit(f"ERROR: Invalid --llm value '{backend}'. Use 'local' or 'venice'", returncode=1)
     os.environ["LLM_BACKEND"] = backend
     return backend
 
 
 @pytest.fixture(scope="session")
 def llm_url(llm_backend):
-    return LLM_BACKENDS.get(llm_backend, LLM_BACKENDS["local"])
+    return LLM_BACKENDS[llm_backend]
 
 
 @pytest.fixture(scope="session")

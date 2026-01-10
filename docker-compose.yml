@@ -31,7 +31,7 @@ services:
       DB_TARGET: local
       PROMPTDEV_USER_PASS: ${PROMPTDEV_USER_PASS}
       MISTRAL_URL: ${MISTRAL_URL:-http://host.docker.internal:8080}
-      LLM_BACKEND: ${LLM_BACKEND:-mistral}
+      LLM_BACKEND: ${LLM_BACKEND:?LLM_BACKEND is required}
       VENICE_API_KEY: ${VENICE_API_KEY}
     volumes:
       - ./src:/app/src

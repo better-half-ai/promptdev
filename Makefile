@@ -2,10 +2,26 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-# Validate db= is set
+# Validate db= is set and valid
 check-db:
 ifndef db
 	$(error db= is required. Use db=local or db=remote)
+endif
+ifneq ($(db),local)
+ifneq ($(db),remote)
+	$(error Invalid db=$(db). Use db=local or db=remote)
+endif
+endif
+
+# Validate llm= is set and valid
+check-llm:
+ifndef llm
+	$(error llm= is required. Use llm=local or llm=venice)
+endif
+ifneq ($(llm),local)
+ifneq ($(llm),venice)
+	$(error Invalid llm=$(llm). Use llm=local or llm=venice)
+endif
 endif
 
 help:
@@ -14,10 +30,9 @@ help:
 	@echo "║                    PromptDev Commands                      ║"
 	@echo "╚════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "🚀 RUN (requires db=local|remote)"
-	@echo "  make run              Run with local Mistral backend"
-	@echo "  make run-venice       Run with Venice.ai API backend"
-	@echo "  make stop             Stop all services"
+	@echo "🚀 RUN (requires db=local|remote llm=local|venice)"
+	@echo "  make run db=... llm=...   Run backend"
+	@echo "  make stop                 Stop all services"
 	@echo ""
 	@echo "🔌 LLM"
 	@echo "  make llm              Start local LLM server"
@@ -26,21 +41,18 @@ help:
 	@echo "  make db-up            Start local PostgreSQL container"
 	@echo "  make db-reset         Nuke local volumes and start fresh"
 	@echo ""
-	@echo "🗄️  DATABASE (requires db=local|remote)"
-	@echo "  make db-migrate       Run migrations"
-	@echo "  make db-inspect       Show tables"
-	@echo "  make db-shell         Open psql shell"
-	@echo "  make db-drop-remote   Drop remote schema (destructive!)"
+	@echo "🗄️  DATABASE (auto-starts containers if needed)"
+	@echo "  make db-migrate db=... [llm=...]  Run migrations (llm required for local)"
+	@echo "  make db-inspect db=... [llm=...]  Show tables (llm required for local)"
+	@echo "  make db-shell db=...              Open psql shell"
+	@echo "  make db-drop-remote               Drop remote schema (destructive!)"
 	@echo ""
 	@echo "🔌 CONNECTION TESTS"
 	@echo "  make test-db-local    Test local PostgreSQL connection"
 	@echo "  make test-db-remote   Test remote Supabase connection"
 	@echo ""
-	@echo "🧪 TESTING"
-	@echo "  make test             Run tests (LLM tests skipped)"
-	@echo "  make test-local       Run tests with local LLM"
-	@echo "  make test-venice      Run tests with Venice.ai API"
-	@echo "  make test-verbose     Run tests verbose"
+	@echo "🧪 TESTING (requires llm=local|venice)"
+	@echo "  make test llm=...    Run tests with specified LLM"
 	@echo ""
 	@echo "🔧 UTILITIES"
 	@echo "  make health           Check backend health"
@@ -54,28 +66,22 @@ help:
 llm:
 	@./scripts/run_mistral_local.sh
 
-run: check-db
+run: check-db check-llm
+	@# Stop any existing services first
+	@LLM_BACKEND=x docker compose --profile local down 2>/dev/null || true
+	@lsof -ti :8001 | xargs kill -9 2>/dev/null || true
 ifeq ($(db),local)
-	@docker compose --profile local up -d
+	@LLM_BACKEND=$(llm) docker compose --profile local up -d
 	@sleep 3
-	@$(MAKE) db-migrate db=$(db)
-	@echo "✅ Backend running at http://localhost:8001 (db=$(db))"
+	@$(MAKE) db-migrate db=$(db) llm=$(llm)
+	@echo "✅ Backend running at http://localhost:8001 (db=$(db), llm=$(llm))"
 else ifeq ($(db),remote)
-	DB_TARGET=remote uv run uvicorn src.main:app --host 0.0.0.0 --port 8001
-endif
-
-run-venice: check-db
-ifeq ($(db),local)
-	@LLM_BACKEND=venice docker compose --profile local up -d --force-recreate
-	@sleep 3
-	@$(MAKE) db-migrate db=$(db)
-	@echo "✅ Backend running with Venice API (db=$(db))"
-else ifeq ($(db),remote)
-	DB_TARGET=remote LLM_BACKEND=venice uv run uvicorn src.main:app --host 0.0.0.0 --port 8001
+	DB_TARGET=remote LLM_BACKEND=$(llm) uv run uvicorn src.main:app --host 0.0.0.0 --port 8001
 endif
 
 stop:
-	@docker compose --profile local down
+	@LLM_BACKEND=x docker compose --profile local down 2>/dev/null || true
+	@lsof -ti :8001 | xargs kill -9 2>/dev/null || true
 	@echo "✅ Stopped"
 
 # ============================================================================
@@ -83,13 +89,13 @@ stop:
 # ============================================================================
 
 db-up:
-	@docker compose --profile local up -d postgres
+	@LLM_BACKEND=x docker compose --profile local up -d postgres
 
 db-reset:
 	@echo "🗑️  Nuking local database..."
-	@docker compose --profile local down -v --remove-orphans
+	@LLM_BACKEND=x docker compose --profile local down -v --remove-orphans
 	@echo "🚀 Starting fresh..."
-	@docker compose --profile local up -d postgres
+	@LLM_BACKEND=x docker compose --profile local up -d postgres
 	@sleep 3
 	@echo "✅ Local database reset complete"
 
@@ -104,25 +110,35 @@ db-drop-remote:
 
 db-migrate: check-db
 ifeq ($(db),local)
-	@docker compose --profile local exec backend uv run python -m scripts.migrate
+ifndef llm
+	$(error llm= is required for db=local. Use llm=local or llm=venice)
+endif
+	@LLM_BACKEND=$(llm) docker compose --profile local up -d postgres backend 2>/dev/null || true
+	@sleep 2
+	@LLM_BACKEND=$(llm) docker compose --profile local exec backend uv run python -m scripts.migrate
 else ifeq ($(db),remote)
 	@DB_TARGET=$(db) uv run python -m scripts.migrate
 endif
 
 db-inspect: check-db
 ifeq ($(db),local)
-	@docker compose --profile local exec backend uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
+ifndef llm
+	$(error llm= is required for db=local. Use llm=local or llm=venice)
+endif
+	@LLM_BACKEND=$(llm) docker compose --profile local up -d postgres backend 2>/dev/null || true
+	@sleep 2
+	@LLM_BACKEND=$(llm) docker compose --profile local exec backend uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
 else ifeq ($(db),remote)
 	@DB_TARGET=$(db) uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
 endif
 
 db-shell: check-db
 ifeq ($(db),local)
-	@docker compose --profile local exec postgres psql -U promptdev_user -d promptdev_db
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+	@LLM_BACKEND=x docker compose --profile local exec postgres psql -U promptdev_user -d promptdev_db
 else ifeq ($(db),remote)
 	@source .env && psql "postgresql://postgres.hykoamfsyttvteipvsbw:$$SUPABASE_PASSWORD@aws-1-us-east-2.pooler.supabase.com:5432/postgres"
-else
-	$(error Invalid db= value. Use db=local or db=remote)
 endif
 
 # ============================================================================
@@ -130,7 +146,9 @@ endif
 # ============================================================================
 
 test-db-local:
-	@docker compose --profile local exec postgres psql -U promptdev_user -d promptdev_db -c "SELECT 1;" && echo "✅ Local connection OK" || echo "❌ Local connection failed"
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+	@LLM_BACKEND=x docker compose --profile local exec postgres psql -U promptdev_user -d promptdev_db -c "SELECT 1;" && echo "✅ Local connection OK" || echo "❌ Local connection failed"
 
 test-db-remote:
 	@source .env && psql "postgresql://postgres.hykoamfsyttvteipvsbw:$$SUPABASE_PASSWORD@aws-1-us-east-2.pooler.supabase.com:5432/postgres" -c "SELECT 1;" && echo "✅ Remote connection OK" || echo "❌ Remote connection failed"
@@ -139,17 +157,8 @@ test-db-remote:
 # TESTING
 # ============================================================================
 
-test:
-	@uv run pytest
-
-test-local:
-	@uv run pytest --llm=local
-
-test-venice:
-	@uv run pytest --llm=venice
-
-test-verbose:
-	@uv run pytest -v
+test: check-llm
+	@uv run pytest --llm=$(llm)
 
 # ============================================================================
 # UTILITIES
@@ -163,4 +172,4 @@ clean:
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleaned"
 
-.PHONY: help llm run run-venice stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test test-local test-venice test-verbose health clean check-db
+.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health clean check-db check-llm
