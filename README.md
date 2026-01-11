@@ -11,9 +11,34 @@ When building AI companions, you need to:
 
 PromptDev provides the infrastructure for this workflow.
 
-## Architecture
+## Multi-Tenant Architecture
 
-**Two modes of operation:**
+Each admin (tenant) has completely isolated:
+- Templates (personas)
+- Users and conversations
+- Guardrails
+- Activity logs
+
+Admins can optionally share templates with others via the shared library.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    PromptDev SaaS                       │
+├─────────────────────────────────────────────────────────┤
+│  Super Admin (from .env)                                │
+│  └── Can CRUD all admins                                │
+├─────────────────────────────────────────────────────────┤
+│  Admin A (tenant)          Admin B (tenant)             │
+│  ├── templates             ├── templates                │
+│  ├── shared templates ◄────┼── shared templates         │
+│  ├── users                 ├── users                    │
+│  │   └── conversations     │   └── conversations        │
+│  ├── guardrails            ├── guardrails               │
+│  └── audit_log             └── audit_log                │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Two Modes of Operation
 
 | Mode | Database | LLM | Use Case |
 |------|----------|-----|----------|
@@ -25,11 +50,6 @@ PromptDev provides the infrastructure for this workflow.
 **Why two LLMs?** Local Mistral for development (no API costs, works offline, ~4GB download). Venice.ai for production (faster, no GPU needed, pay-per-use).
 
 **No defaults:** Every command requires explicit `db=local|remote` and `llm=local|venice`. This prevents accidentally running production commands against local DB or vice versa.
-
-## Documentation
-
-- [Operator Guide](docs/operator_guide.md) — How to use the dashboard
-- [Memory Architecture](docs/memory_architecture.md) — How user memory works
 
 ---
 
@@ -58,19 +78,37 @@ cp .env.example .env
 uv sync
 ```
 
+### Run Migrations
+
+```bash
+# Local development
+make db-migrate db=local
+
+# Production
+make db-migrate db=remote
+```
+
+### Create Admin
+
+```bash
+# Create first admin
+make admin-create db=remote email=admin@example.com password=secretpass123
+```
+
 ### Run
 
 ```bash
-# Local development (local Postgres + local LLM)
+# Local development
 make run db=local llm=local
 
-# Production (Supabase + Venice.ai)
+# Production
 make run db=remote llm=venice
 ```
 
 ### Access
 
 - **Dashboard:** http://localhost:8001/dashboard
+- **Login:** http://localhost:8001/login
 - **Chat UI:** http://localhost:8001/chat-ui
 - **API Docs:** http://localhost:8001/docs
 
@@ -81,6 +119,13 @@ make run db=remote llm=venice
 ### Environment Variables (.env)
 
 ```bash
+# Super Admin (not in database, checked at runtime)
+SUPER_ADMIN_EMAIL=super@yourdomain.com
+SUPER_ADMIN_PASSWORD=very_secure_super_admin_password
+
+# Session Security
+SESSION_SECRET_KEY=random_32_char_hex_string
+
 # Database - Local
 PROMPTDEV_USER_PASS=your_local_db_password
 
@@ -91,37 +136,42 @@ SUPABASE_PASSWORD=your_supabase_password
 VENICE_API_KEY=your_venice_api_key
 VENICE_API_URL=https://api.venice.ai/api/v1
 VENICE_MODEL=mistral-31-24b
-
-# Admin Auth
-SESSION_SECRET_KEY=random_32_char_hex_string
 ```
 
-### Database Options
+### Super Admin
 
-| Option | Description |
-|--------|-------------|
-| `db=local` | Local PostgreSQL in Docker |
-| `db=remote` | Supabase cloud PostgreSQL |
+The super admin is defined in `.env`, not in the database. Super admin can:
+- Create, list, deactivate, delete other admins
+- View all tenants (for support purposes)
 
-### LLM Options
+Super admin cannot access tenant data without explicit audit logging.
 
-| Option | Description |
-|--------|-------------|
-| `llm=local` | Local Mistral via llama.cpp (requires `make llm` first) |
-| `llm=venice` | Venice.ai API (requires `VENICE_API_KEY`) |
+---
+
+## Admin Management
+
+```bash
+# Create admin
+make admin-create db=remote email=newadmin@example.com password=secretpass123
+
+# List all admins
+make admin-list db=remote
+
+# Deactivate admin (can't login, data preserved)
+make admin-deactivate db=remote email=badactor@example.com
+```
 
 ---
 
 ## Commands
 
-All commands require explicit `db=` and/or `llm=` parameters. No defaults.
+All commands require explicit `db=` and/or `llm=` parameters.
 
 ### Run
 
 ```bash
 make run db=local llm=local      # Local dev
-make run db=local llm=venice     # Local DB + Venice API
-make run db=remote llm=venice    # Production (Supabase + Venice)
+make run db=remote llm=venice    # Production
 make stop                        # Stop all services
 ```
 
@@ -134,7 +184,6 @@ make db-migrate db=local         # Run migrations (local)
 make db-migrate db=remote        # Run migrations (Supabase)
 make db-shell db=local           # Open psql shell (local)
 make db-shell db=remote          # Open psql shell (Supabase)
-make db-inspect db=local llm=local   # Show tables
 ```
 
 ### Testing
@@ -144,203 +193,41 @@ make test llm=local              # Run tests with local LLM
 make test llm=venice             # Run tests with Venice API
 ```
 
-### Admin
-
-```bash
-make admin-create db=remote user=admin   # Create admin user
-make health                              # Check backend health
-```
+Tests use testcontainers (isolated PostgreSQL), not your local/remote DB.
 
 ---
 
-## Admin Authentication
-
-All `/admin/*` endpoints require authentication.
-
-### Setup Admin User
-
-```bash
-# Run migration first
-make db-migrate db=remote
-
-# Create admin user (will prompt for password)
-make admin-create db=remote user=admin
-```
-
-### Login
-
-1. Visit http://localhost:8001/login
-2. Enter username and password
-3. Session valid for 24 hours
-
-### API Authentication
-
-```bash
-# Login (sets cookie)
-curl -X POST http://localhost:8001/admin/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "yourpassword"}' \
-  -c cookies.txt
-
-# Use cookie for admin requests
-curl http://localhost:8001/admin/users -b cookies.txt
-
-# Logout
-curl -X POST http://localhost:8001/admin/logout -b cookies.txt
-```
-
----
-
-## Dashboard Guide
-
-### Overview
-
-Open http://localhost:8001/dashboard (requires login)
-
-Sections:
-- **Dashboard** — Statistics (active users, messages, response times)
-- **Personalities** — Create and edit AI templates
-- **Monitor** — Watch conversations, intervene if needed
-
-### Personalities (Templates)
-
-Templates define how the AI behaves.
-
-**Create:**
-1. Click **Personalities** → **+ New Personality**
-2. Enter name, content, and your name
-3. Click **Create**
-
-**Edit:**
-1. Click **Edit** on any template
-2. Make changes, add a note
-3. Click **Save Changes** (creates new version)
-
-**Version History:**
-- Click **History** to see all versions
-- Click **Rollback** to restore old version
-
-### Monitor (Conversations)
-
-**View:** Click **Monitor** to see all users and conversations
-
-**Halt:** Stop AI from responding (for review)
-- Click **Halt**, enter reason
-- User sees "Conversation paused"
-
-**Resume:** Click **Resume** to restart AI responses
-
-**Inject:** Add context mid-conversation
-- Click **Inject**, type message, click **Send**
-
----
-
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐
-│   Browser       │     │   Venice.ai     │
-│   Dashboard     │     │   (LLM API)     │
-└────────┬────────┘     └────────▲────────┘
-         │                       │
-    ┌────▼────────────────────────────┐
-    │         FastAPI Backend         │
-    │         localhost:8001          │
-    └────┬───────────────────────┬────┘
-         │                       │
-    ┌────▼────────┐        ┌────▼────────┐
-    │  Local      │   OR   │  Supabase   │
-    │  PostgreSQL │        │  PostgreSQL │
-    └─────────────┘        └─────────────┘
-```
-
-### Database Schema
+## Database Schema
 
 | Table | Purpose |
 |-------|---------|
-| `conversation_history` | All messages (user_id isolated) |
-| `user_memory` | Key-value storage (JSONB) |
-| `user_state` | Active/halted status, personality |
-| `system_prompt` | Templates (personas) |
+| `admins` | Admin users (tenants) |
+| `admin_audit_log` | All admin actions |
+| `system_prompt` | Templates (tenant isolated) |
 | `prompt_version_history` | Version audit trail |
-| `guardrail_configs` | Safety rules |
+| `conversation_history` | All messages (tenant isolated) |
+| `user_memory` | Key-value storage per user |
+| `user_state` | Active/halted status |
+| `guardrail_configs` | Safety rules (tenant isolated) |
 | `llm_requests` | Request logs for telemetry |
-| `admin_users` | Dashboard authentication |
+
+All tables have `tenant_id` for complete isolation.
 
 ---
 
-## API Examples
+## Template Sharing
 
-### Chat
+1. Admin A creates template, marks `is_shareable = true`
+2. Template appears in shared library
+3. Admin B browses shared library, clicks "Clone"
+4. Independent copy created in Admin B's space
+5. Original and clone are completely independent
 
-```bash
-curl -X POST http://localhost:8001/chat \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "user123", "message": "Hello!"}'
-```
-
-### Templates (requires auth)
-
-```bash
-# Create
-curl -X POST http://localhost:8001/admin/templates \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{"name": "companion", "content": "You are helpful.", "created_by": "admin"}'
-
-# List
-curl http://localhost:8001/admin/templates -b cookies.txt
-```
-
-### Interventions (requires auth)
-
-```bash
-# Halt
-curl -X POST http://localhost:8001/admin/interventions/user123/halt \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{"operator": "admin", "reason": "Review needed"}'
-
-# Resume
-curl -X POST "http://localhost:8001/admin/interventions/user123/resume?operator=admin" \
-  -b cookies.txt
-```
-
-Full API: http://localhost:8001/docs
+Lineage tracked via `cloned_from_id` and `cloned_from_tenant`.
 
 ---
 
-## Troubleshooting
+## Documentation
 
-| Problem | Solution |
-|---------|----------|
-| `db= is required` | All commands need explicit `db=local` or `db=remote` |
-| `llm= is required` | Test/run commands need `llm=local` or `llm=venice` |
-| 401 on admin routes | Login first at `/login` or via API |
-| Connection refused (Supabase) | Check `SUPABASE_PASSWORD` in `.env` |
-| Venice API errors | Check `VENICE_API_KEY` in `.env` |
-| Port 8001 in use | Run `make stop` or `lsof -ti :8001 \| xargs kill` |
-
----
-
-## Development
-
-### Local LLM Setup
-
-```bash
-# Download and start Mistral (first time takes ~10 min)
-make llm
-
-# Then in another terminal
-make run db=local llm=local
-```
-
-### Running Tests
-
-Tests use testcontainers (real PostgreSQL, no mocks).
-
-```bash
-# Requires Docker running
-make test llm=local
-make test llm=venice
-```
+- [Operator Guide](docs/operator_guide.md) — How to use the dashboard
+- [Memory Architecture](docs/memory_architecture.md) — How user memory works
