@@ -163,6 +163,71 @@ make admin-deactivate db=remote email=badactor@example.com
 
 ---
 
+## Authentication API
+
+All `/admin/*` routes require authentication via session cookie.
+
+### Login
+
+```bash
+# Login and save session cookie
+curl -X POST http://localhost:8000/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"yourpassword"}' \
+  -c cookies.txt
+
+# Response: {"status":"ok","email":"admin@example.com","is_super":false}
+```
+
+### Using Authenticated Endpoints
+
+```bash
+# List your templates
+curl http://localhost:8000/admin/templates -b cookies.txt
+
+# Create a template
+curl -X POST http://localhost:8000/admin/templates \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my_persona","content":"You are a helpful assistant."}' \
+  -b cookies.txt
+
+# List users with conversations
+curl http://localhost:8000/admin/users -b cookies.txt
+
+# Halt a user
+curl -X POST http://localhost:8000/admin/users/user123/halt \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Testing intervention"}' \
+  -b cookies.txt
+```
+
+### Super Admin Endpoints
+
+```bash
+# Create another admin (super admin only)
+curl -X POST http://localhost:8000/super/admins \
+  -H "Content-Type: application/json" \
+  -d '{"email":"newadmin@example.com","password":"pass123"}' \
+  -b cookies.txt
+
+# List all admins
+curl http://localhost:8000/super/admins -b cookies.txt
+
+# Deactivate an admin
+curl -X PUT http://localhost:8000/super/admins/2 \
+  -H "Content-Type: application/json" \
+  -d '{"is_active":false}' \
+  -b cookies.txt
+```
+
+### Session Details
+
+- Cookie name: `promptdev_session`
+- Duration: 24 hours
+- Logout: `POST /admin/logout`
+
+---
+
 ## Commands
 
 All commands require explicit `db=` and/or `llm=` parameters.
