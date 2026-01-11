@@ -13,6 +13,11 @@ from db.db import get_conn, put_conn
 logger = logging.getLogger(__name__)
 
 
+def _tid(tenant_id: Optional[int]) -> int:
+    """Convert None tenant_id to 0 for SQL operations."""
+    return tenant_id if tenant_id is not None else 0
+
+
 @dataclass
 class DashboardStats:
     """Aggregated statistics for dashboard display."""
@@ -31,7 +36,8 @@ def track_llm_request(
     template_name: Optional[str] = None,
     request_tokens: Optional[int] = None,
     response_tokens: Optional[int] = None,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> int:
     """Track an LLM request event."""
     conn = get_conn()
@@ -44,27 +50,27 @@ def track_llm_request(
             cur.execute(
                 """
                 INSERT INTO llm_requests (
-                    user_id, template_name, response_time_ms,
+                    tenant_id, user_id, template_name, response_time_ms,
                     request_tokens, response_tokens, total_tokens, error
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (user_id, template_name, response_time_ms,
+                (_tid(tenant_id), user_id, template_name, response_time_ms,
                  request_tokens, response_tokens, total_tokens, error)
             )
             request_id = cur.fetchone()[0]
             
             cur.execute(
                 """
-                INSERT INTO user_activity (user_id, total_messages, total_errors)
-                VALUES (%s, 1, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
+                INSERT INTO user_activity (tenant_id, user_id, total_messages, total_errors)
+                VALUES (%s, %s, 1, %s)
+                ON CONFLICT (tenant_id, user_id) DO UPDATE SET
                     last_seen = NOW(),
                     total_messages = user_activity.total_messages + 1,
                     total_errors = user_activity.total_errors + EXCLUDED.total_errors
                 """,
-                (user_id, 1 if error else 0)
+                (_tid(tenant_id), user_id, 1 if error else 0)
             )
             
             conn.commit()
@@ -78,7 +84,7 @@ def track_llm_request(
         put_conn(conn)
 
 
-def aggregate_metrics() -> None:
+def aggregate_metrics(tenant_id: Optional[int] = None) -> None:
     """Aggregate metrics for current hour and day."""
     conn = get_conn()
     try:
@@ -87,7 +93,7 @@ def aggregate_metrics() -> None:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         with conn.cursor() as cur:
-            # Hourly metrics - EXCLUDE errors from avg response time
+            # Hourly metrics
             cur.execute(
                 """
                 SELECT 
@@ -95,9 +101,9 @@ def aggregate_metrics() -> None:
                     AVG(response_time_ms) FILTER (WHERE error IS NULL)::INTEGER as avg_response,
                     COUNT(*) FILTER (WHERE error IS NOT NULL)::FLOAT / NULLIF(COUNT(*), 0) * 100 as error_rate
                 FROM llm_requests 
-                WHERE created_at >= %s AND created_at < %s
+                WHERE tenant_id = %s AND created_at >= %s AND created_at < %s
                 """,
-                (hour_start, hour_start + timedelta(hours=1))
+                (_tid(tenant_id), hour_start, hour_start + timedelta(hours=1))
             )
             row = cur.fetchone()
             hourly_value = {
@@ -108,12 +114,12 @@ def aggregate_metrics() -> None:
             
             cur.execute(
                 """
-                INSERT INTO metric_snapshots (metric_name, time_window, window_start, value)
-                VALUES ('hourly_summary', 'hour', %s, %s)
-                ON CONFLICT (metric_name, time_window, window_start) 
+                INSERT INTO metric_snapshots (tenant_id, metric_name, time_window, window_start, value)
+                VALUES (%s, 'hourly_summary', 'hour', %s, %s)
+                ON CONFLICT (tenant_id, metric_name, time_window, window_start) 
                 DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
                 """,
-                (hour_start, psycopg2.extras.Json(hourly_value))
+                (_tid(tenant_id), hour_start, psycopg2.extras.Json(hourly_value))
             )
             
             # Daily metrics
@@ -123,9 +129,9 @@ def aggregate_metrics() -> None:
                     COUNT(*) as messages,
                     COUNT(DISTINCT user_id) as active_users
                 FROM llm_requests 
-                WHERE created_at >= %s
+                WHERE tenant_id = %s AND created_at >= %s
                 """,
-                (day_start,)
+                (_tid(tenant_id), day_start)
             )
             row = cur.fetchone()
             messages_today, active_users = row[0], row[1]
@@ -134,12 +140,12 @@ def aggregate_metrics() -> None:
                 """
                 SELECT template_name, COUNT(*) as count
                 FROM llm_requests
-                WHERE created_at >= %s AND template_name IS NOT NULL
+                WHERE tenant_id = %s AND created_at >= %s AND template_name IS NOT NULL
                 GROUP BY template_name
                 ORDER BY count DESC
                 LIMIT 5
                 """,
-                (day_start,)
+                (_tid(tenant_id), day_start)
             )
             top_templates = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
             
@@ -151,12 +157,12 @@ def aggregate_metrics() -> None:
             
             cur.execute(
                 """
-                INSERT INTO metric_snapshots (metric_name, time_window, window_start, value)
-                VALUES ('daily_summary', 'day', %s, %s)
-                ON CONFLICT (metric_name, time_window, window_start)
+                INSERT INTO metric_snapshots (tenant_id, metric_name, time_window, window_start, value)
+                VALUES (%s, 'daily_summary', 'day', %s, %s)
+                ON CONFLICT (tenant_id, metric_name, time_window, window_start)
                 DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
                 """,
-                (day_start, psycopg2.extras.Json(daily_value))
+                (_tid(tenant_id), day_start, psycopg2.extras.Json(daily_value))
             )
             
             conn.commit()
@@ -170,7 +176,7 @@ def aggregate_metrics() -> None:
         put_conn(conn)
 
 
-def get_dashboard_stats() -> DashboardStats:
+def get_dashboard_stats(tenant_id: Optional[int] = None) -> DashboardStats:
     """Get aggregated statistics for the operator dashboard."""
     conn = get_conn()
     try:
@@ -183,13 +189,13 @@ def get_dashboard_stats() -> DashboardStats:
             cur.execute(
                 """
                 SELECT value FROM metric_snapshots
-                WHERE metric_name = 'daily_summary' 
+                WHERE tenant_id = %s AND metric_name = 'daily_summary' 
                 AND time_window = 'day'
                 AND window_start = %s
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (day_start,)
+                (_tid(tenant_id), day_start)
             )
             row = cur.fetchone()
             
@@ -201,8 +207,8 @@ def get_dashboard_stats() -> DashboardStats:
             else:
                 # Fallback
                 cur.execute(
-                    "SELECT COUNT(DISTINCT user_id), COUNT(*) FROM llm_requests WHERE created_at >= %s",
-                    (day_start,)
+                    "SELECT COUNT(DISTINCT user_id), COUNT(*) FROM llm_requests WHERE tenant_id = %s AND created_at >= %s",
+                    (_tid(tenant_id), day_start)
                 )
                 row = cur.fetchone()
                 active_users_today, total_messages_today = row[0], row[1]
@@ -212,13 +218,13 @@ def get_dashboard_stats() -> DashboardStats:
             cur.execute(
                 """
                 SELECT value FROM metric_snapshots
-                WHERE metric_name = 'hourly_summary'
+                WHERE tenant_id = %s AND metric_name = 'hourly_summary'
                 AND time_window = 'hour'
                 AND window_start = %s
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (hour_start,)
+                (_tid(tenant_id), hour_start)
             )
             row = cur.fetchone()
             
@@ -228,7 +234,7 @@ def get_dashboard_stats() -> DashboardStats:
                 avg_response_time = hourly.get("avg_response_time_ms", 0.0)
                 error_rate = hourly.get("error_rate_percent", 0.0)
             else:
-                # Fallback - EXCLUDE errors from avg response time
+                # Fallback
                 cur.execute(
                     """
                     SELECT 
@@ -236,9 +242,9 @@ def get_dashboard_stats() -> DashboardStats:
                         AVG(response_time_ms) FILTER (WHERE error IS NULL)::INTEGER,
                         COUNT(*) FILTER (WHERE error IS NOT NULL)::FLOAT / NULLIF(COUNT(*), 0) * 100
                     FROM llm_requests
-                    WHERE created_at >= %s
+                    WHERE tenant_id = %s AND created_at >= %s
                     """,
-                    (hour_start,)
+                    (_tid(tenant_id), hour_start)
                 )
                 row = cur.fetchone()
                 messages_hour = row[0]
@@ -247,8 +253,8 @@ def get_dashboard_stats() -> DashboardStats:
             
             # Active users last hour (always live)
             cur.execute(
-                "SELECT COUNT(DISTINCT user_id) FROM llm_requests WHERE created_at >= %s",
-                (hour_start,)
+                "SELECT COUNT(DISTINCT user_id) FROM llm_requests WHERE tenant_id = %s AND created_at >= %s",
+                (_tid(tenant_id), hour_start)
             )
             active_users_hour = cur.fetchone()[0]
             
@@ -266,7 +272,7 @@ def get_dashboard_stats() -> DashboardStats:
         put_conn(conn)
 
 
-def get_user_stats(user_id: str) -> Optional[dict]:
+def get_user_stats(user_id: str, tenant_id: Optional[int] = None) -> Optional[dict]:
     """Get statistics for a specific user."""
     conn = get_conn()
     try:
@@ -275,9 +281,9 @@ def get_user_stats(user_id: str) -> Optional[dict]:
                 """
                 SELECT first_seen, last_seen, total_messages, total_errors
                 FROM user_activity
-                WHERE user_id = %s
+                WHERE tenant_id = %s AND user_id = %s
                 """,
-                (user_id,)
+                (_tid(tenant_id), user_id)
             )
             row = cur.fetchone()
             
@@ -290,9 +296,9 @@ def get_user_stats(user_id: str) -> Optional[dict]:
                 """
                 SELECT AVG(response_time_ms)::INTEGER
                 FROM llm_requests
-                WHERE user_id = %s AND error IS NULL
+                WHERE tenant_id = %s AND user_id = %s AND error IS NULL
                 """,
-                (user_id,)
+                (_tid(tenant_id), user_id)
             )
             avg_response_time = cur.fetchone()[0] or 0
             

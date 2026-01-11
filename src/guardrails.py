@@ -3,11 +3,6 @@ Guardrail configuration management for controlling LLM behavior.
 
 This module manages system prompt instructions that override or control
 the base LLM's built-in safety filters and behavior patterns.
-
-Operators can:
-1. Use preset configs (unrestricted, research_safe, clinical)
-2. Create custom guardrail configs with multiple rules
-3. Apply configs to modify system prompts before LLM calls
 """
 
 from typing import Optional, List, Dict, Any
@@ -51,8 +46,36 @@ class GuardrailConfig(BaseModel):
     updated_at: datetime
     created_by: Optional[str] = None
     is_active: bool
+    tenant_id: int = 0
     
     model_config = ConfigDict(from_attributes=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _tid(tenant_id: Optional[int]) -> int:
+    """Convert None tenant_id to 0 for SQL operations."""
+    return tenant_id if tenant_id is not None else 0
+
+
+GUARDRAIL_COLUMNS = "id, name, description, rules, created_at, updated_at, created_by, is_active, tenant_id"
+
+
+def _row_to_config(row) -> GuardrailConfig:
+    """Convert database row to GuardrailConfig."""
+    return GuardrailConfig(
+        id=row[0],
+        name=row[1],
+        description=row[2],
+        rules=row[3],
+        created_at=row[4],
+        updated_at=row[5],
+        created_by=row[6],
+        is_active=row[7],
+        tenant_id=row[8] if row[8] is not None else 0
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -63,25 +86,10 @@ def create_config(
     name: str,
     rules: List[Dict[str, Any]],
     description: Optional[str] = None,
-    created_by: Optional[str] = None
+    created_by: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Create a new guardrail configuration.
-    
-    Args:
-        name: Unique config name
-        rules: List of rule dictionaries
-        description: Optional description
-        created_by: Creator identifier
-        
-    Returns:
-        Config ID
-        
-    Raises:
-        InvalidRulesError: If rules are invalid
-        GuardrailError: If creation fails
-    """
-    # Validate rules
+    """Create a new guardrail configuration."""
     if not isinstance(rules, list):
         raise InvalidRulesError("Rules must be a list")
     
@@ -96,143 +104,110 @@ def create_config(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO guardrail_configs (name, description, rules, created_by)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO guardrail_configs (tenant_id, name, description, rules, created_by)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (name, description, json.dumps(rules), created_by)
+                (_tid(tenant_id), name, description, json.dumps(rules), created_by)
             )
             config_id = cur.fetchone()[0]
         conn.commit()
         return config_id
     except Exception as e:
         conn.rollback()
+        if "unique" in str(e).lower():
+            raise GuardrailError(f"Config name '{name}' already exists")
         raise GuardrailError(f"Failed to create config: {e}")
     finally:
         put_conn(conn)
 
 
-def get_config(name: str) -> GuardrailConfig:
-    """
-    Get guardrail config by name.
-    
-    Args:
-        name: Config name
-        
-    Returns:
-        GuardrailConfig object
-        
-    Raises:
-        GuardrailNotFoundError: If config doesn't exist
-    """
+def get_config(name: str, tenant_id: Optional[int] = None) -> GuardrailConfig:
+    """Get guardrail config by name."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # First try tenant-specific config
             cur.execute(
-                """
-                SELECT id, name, description, rules, created_at, updated_at, created_by, is_active
+                f"""
+                SELECT {GUARDRAIL_COLUMNS}
                 FROM guardrail_configs
-                WHERE name = %s AND is_active = true
+                WHERE name = %s AND tenant_id = %s AND is_active = true
                 """,
-                (name,)
+                (name, _tid(tenant_id))
             )
             row = cur.fetchone()
+            
+            # Fall back to system config (tenant_id = 0)
+            if not row and _tid(tenant_id) != 0:
+                cur.execute(
+                    f"""
+                    SELECT {GUARDRAIL_COLUMNS}
+                    FROM guardrail_configs
+                    WHERE name = %s AND tenant_id = 0 AND is_active = true
+                    """,
+                    (name,)
+                )
+                row = cur.fetchone()
             
             if not row:
                 raise GuardrailNotFoundError(f"Config '{name}' not found")
             
-            return GuardrailConfig(
-                id=row[0],
-                name=row[1],
-                description=row[2],
-                rules=row[3],  # PostgreSQL returns JSONB as Python list/dict
-                created_at=row[4],
-                updated_at=row[5],
-                created_by=row[6],
-                is_active=row[7]
-            )
+            return _row_to_config(row)
     finally:
         put_conn(conn)
 
 
-def get_config_by_id(config_id: int) -> GuardrailConfig:
-    """
-    Get guardrail config by ID.
-    
-    Args:
-        config_id: Config ID
-        
-    Returns:
-        GuardrailConfig object
-        
-    Raises:
-        GuardrailNotFoundError: If config doesn't exist
-    """
+def get_config_by_id(config_id: int, tenant_id: Optional[int] = None) -> GuardrailConfig:
+    """Get guardrail config by ID."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id, name, description, rules, created_at, updated_at, created_by, is_active
+                f"""
+                SELECT {GUARDRAIL_COLUMNS}
                 FROM guardrail_configs
-                WHERE id = %s
+                WHERE id = %s AND (tenant_id = %s OR tenant_id = 0)
                 """,
-                (config_id,)
+                (config_id, _tid(tenant_id))
             )
             row = cur.fetchone()
             
             if not row:
                 raise GuardrailNotFoundError(f"Config ID {config_id} not found")
             
-            return GuardrailConfig(
-                id=row[0],
-                name=row[1],
-                description=row[2],
-                rules=row[3],
-                created_at=row[4],
-                updated_at=row[5],
-                created_by=row[6],
-                is_active=row[7]
-            )
+            return _row_to_config(row)
     finally:
         put_conn(conn)
 
 
-def list_configs(include_inactive: bool = False) -> List[GuardrailConfig]:
-    """
-    List all guardrail configs.
-    
-    Args:
-        include_inactive: Include inactive configs
-        
-    Returns:
-        List of GuardrailConfig objects
-    """
+def list_configs(include_inactive: bool = False, tenant_id: Optional[int] = None) -> List[GuardrailConfig]:
+    """List all guardrail configs for tenant (plus system configs)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             if include_inactive:
-                query = "SELECT id, name, description, rules, created_at, updated_at, created_by, is_active FROM guardrail_configs ORDER BY name"
-                cur.execute(query)
-            else:
-                query = "SELECT id, name, description, rules, created_at, updated_at, created_by, is_active FROM guardrail_configs WHERE is_active = true ORDER BY name"
-                cur.execute(query)
-            
-            rows = cur.fetchall()
-            
-            return [
-                GuardrailConfig(
-                    id=row[0],
-                    name=row[1],
-                    description=row[2],
-                    rules=row[3],
-                    created_at=row[4],
-                    updated_at=row[5],
-                    created_by=row[6],
-                    is_active=row[7]
+                cur.execute(
+                    f"""
+                    SELECT {GUARDRAIL_COLUMNS}
+                    FROM guardrail_configs
+                    WHERE tenant_id = %s OR tenant_id = 0
+                    ORDER BY name
+                    """,
+                    (_tid(tenant_id),)
                 )
-                for row in rows
-            ]
+            else:
+                cur.execute(
+                    f"""
+                    SELECT {GUARDRAIL_COLUMNS}
+                    FROM guardrail_configs
+                    WHERE (tenant_id = %s OR tenant_id = 0) AND is_active = true
+                    ORDER BY name
+                    """,
+                    (_tid(tenant_id),)
+                )
+            
+            return [_row_to_config(row) for row in cur.fetchall()]
     finally:
         put_conn(conn)
 
@@ -241,22 +216,10 @@ def update_config(
     config_id: int,
     rules: Optional[List[Dict[str, Any]]] = None,
     description: Optional[str] = None,
-    is_active: Optional[bool] = None
+    is_active: Optional[bool] = None,
+    tenant_id: Optional[int] = None
 ) -> None:
-    """
-    Update guardrail config.
-    
-    Args:
-        config_id: Config ID to update
-        rules: New rules (if provided)
-        description: New description (if provided)
-        is_active: New active status (if provided)
-        
-    Raises:
-        GuardrailNotFoundError: If config doesn't exist
-        InvalidRulesError: If rules are invalid
-    """
-    # Validate rules if provided
+    """Update guardrail config."""
     if rules is not None:
         if not isinstance(rules, list):
             raise InvalidRulesError("Rules must be a list")
@@ -267,7 +230,6 @@ def update_config(
             if "type" not in rule:
                 raise InvalidRulesError("Each rule must have a 'type' field")
     
-    # Build update query dynamically
     updates = []
     params = []
     
@@ -284,15 +246,15 @@ def update_config(
         params.append(is_active)
     
     if not updates:
-        return  # Nothing to update
+        return
     
     updates.append("updated_at = NOW()")
-    params.append(config_id)
+    params.extend([config_id, _tid(tenant_id)])
     
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            query = f"UPDATE guardrail_configs SET {', '.join(updates)} WHERE id = %s"
+            query = f"UPDATE guardrail_configs SET {', '.join(updates)} WHERE id = %s AND tenant_id = %s"
             cur.execute(query, params)
             
             if cur.rowcount == 0:
@@ -309,29 +271,20 @@ def update_config(
         put_conn(conn)
 
 
-def delete_config(config_id: int, soft: bool = True) -> None:
-    """
-    Delete guardrail config.
-    
-    Args:
-        config_id: Config ID to delete
-        soft: If True, mark inactive; if False, hard delete
-        
-    Raises:
-        GuardrailNotFoundError: If config doesn't exist
-    """
+def delete_config(config_id: int, soft: bool = True, tenant_id: Optional[int] = None) -> None:
+    """Delete guardrail config."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             if soft:
                 cur.execute(
-                    "UPDATE guardrail_configs SET is_active = false, updated_at = NOW() WHERE id = %s",
-                    (config_id,)
+                    "UPDATE guardrail_configs SET is_active = false, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+                    (config_id, _tid(tenant_id))
                 )
             else:
                 cur.execute(
-                    "DELETE FROM guardrail_configs WHERE id = %s",
-                    (config_id,)
+                    "DELETE FROM guardrail_configs WHERE id = %s AND tenant_id = %s",
+                    (config_id, _tid(tenant_id))
                 )
             
             if cur.rowcount == 0:
@@ -339,7 +292,6 @@ def delete_config(config_id: int, soft: bool = True) -> None:
         
         conn.commit()
     except GuardrailNotFoundError:
-        conn.rollback()
         raise
     except Exception as e:
         conn.rollback()
@@ -352,33 +304,16 @@ def delete_config(config_id: int, soft: bool = True) -> None:
 # APPLY LOGIC
 # ═══════════════════════════════════════════════════════════════════════
 
-def apply_guardrails(base_prompt: str, config_name: str) -> str:
-    """
-    Apply guardrail config to modify system prompt.
+def apply_guardrails(base_prompt: str, config_name: str, tenant_id: Optional[int] = None) -> str:
+    """Apply guardrail config to modify system prompt."""
+    config = get_config(config_name, tenant_id)
     
-    Prepends guardrail system instructions to the base prompt.
-    Rules are sorted by priority (higher priority first).
-    
-    Args:
-        base_prompt: Original system prompt
-        config_name: Guardrail config name to apply
-        
-    Returns:
-        Modified prompt with guardrail instructions
-        
-    Raises:
-        GuardrailNotFoundError: If config doesn't exist
-    """
-    config = get_config(config_name)
-    
-    # Sort rules by priority (higher first), default priority = 0
     sorted_rules = sorted(
         config.rules,
         key=lambda r: r.get("priority", 0),
         reverse=True
     )
     
-    # Build guardrail instructions
     instructions = []
     for rule in sorted_rules:
         if rule["type"] == "system_instruction" and "content" in rule:
@@ -387,34 +322,17 @@ def apply_guardrails(base_prompt: str, config_name: str) -> str:
     if not instructions:
         return base_prompt
     
-    # Prepend instructions to base prompt
     guardrail_section = "\n\n".join(instructions)
     return f"{guardrail_section}\n\n{base_prompt}"
 
 
 def get_preset_names() -> List[str]:
-    """
-    Get list of preset guardrail config names.
-    
-    Returns:
-        List of preset names
-    """
+    """Get list of preset guardrail config names."""
     return ["unrestricted", "research_safe", "clinical"]
 
 
 def validate_rules(rules: List[Dict[str, Any]]) -> bool:
-    """
-    Validate rules structure.
-    
-    Args:
-        rules: List of rule dictionaries to validate
-        
-    Returns:
-        True if valid
-        
-    Raises:
-        InvalidRulesError: If rules are invalid
-    """
+    """Validate rules structure."""
     if not isinstance(rules, list):
         raise InvalidRulesError("Rules must be a list")
     

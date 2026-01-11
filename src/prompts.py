@@ -1,40 +1,13 @@
 """
-Template-based prompt management with Jinja2 rendering and immutable versioning.
-
-This module provides:
-- CRUD operations for prompt templates
-- Immutable versioning (every change creates a new version)
-- Rollback to any previous version
-- Jinja2 template rendering with variable substitution
-- Syntax validation before saving
-- Full audit trail in prompt_version_history
-
-Example:
-    >>> # Create a template
-    >>> template_id = create_template(
-    ...     "system_greeting",
-    ...     "You are {{role}}. Context: {{context}}"
-    ... )
-    >>> 
-    >>> # Render with variables
-    >>> content = render_template(
-    ...     template_id,
-    ...     {"role": "helpful assistant", "context": "customer support"}
-    ... )
-    >>> 
-    >>> # Update creates new version
-    >>> update_template(template_id, "You are {{role}}. Mission: {{mission}}")
-    >>> 
-    >>> # Rollback to v1 (creates v3 with v1 content)
-    >>> rollback_to_version(template_id, 1)
+Template-based prompt management with Jinja2 rendering and multi-tenant support.
 """
 
 import logging
 from typing import Optional, Any
 from datetime import datetime
-from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, StrictUndefined
+from jinja2 import TemplateSyntaxError as Jinja2SyntaxError
 from jinja2.sandbox import SandboxedEnvironment
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 
 from db.db import get_conn, put_conn
 
@@ -79,19 +52,12 @@ class Template(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_active: bool = True
+    tenant_id: int = 0
+    is_shareable: bool = False
+    cloned_from_id: Optional[int] = None
+    cloned_from_tenant: Optional[int] = None
     
     model_config = ConfigDict(from_attributes=True)
-    
-    @field_validator('content')
-    @classmethod
-    def validate_jinja2_syntax(cls, v: str) -> str:
-        """Validate Jinja2 template syntax."""
-        try:
-            env = SandboxedEnvironment()
-            env.parse(v)
-            return v
-        except Jinja2SyntaxError as e:
-            raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
 
 
 class TemplateVersion(BaseModel):
@@ -109,6 +75,47 @@ class TemplateVersion(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _tid(tenant_id: Optional[int]) -> int:
+    """Convert None tenant_id to 0 for SQL operations."""
+    return tenant_id if tenant_id is not None else 0
+
+
+TEMPLATE_COLUMNS = """
+    id, name, content, current_version, created_at, updated_at, 
+    is_active, tenant_id, is_shareable, cloned_from_id, cloned_from_tenant
+"""
+
+
+def _row_to_template(row) -> Template:
+    """Convert a database row to a Template object."""
+    return Template(
+        id=row[0],
+        name=row[1],
+        content=row[2],
+        current_version=row[3],
+        created_at=row[4],
+        updated_at=row[5],
+        is_active=row[6],
+        tenant_id=row[7] if row[7] is not None else 0,
+        is_shareable=row[8] if row[8] is not None else False,
+        cloned_from_id=row[9],
+        cloned_from_tenant=row[10]
+    )
+
+
+def _validate_jinja2(content: str) -> None:
+    """Validate Jinja2 syntax."""
+    try:
+        env = SandboxedEnvironment()
+        env.parse(content)
+    except Jinja2SyntaxError as e:
+        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CRUD OPERATIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -116,195 +123,99 @@ def create_template(
     name: str,
     content: str,
     created_by: Optional[str] = None,
-    change_description: Optional[str] = None
+    change_description: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Create a new template with version 1.
-    
-    Args:
-        name: Template name (unique)
-        content: Jinja2 template content
-        created_by: Who created this template
-        change_description: Description of what this template does
-    
-    Returns:
-        Template ID
-    
-    Raises:
-        TemplateSyntaxError: If Jinja2 syntax is invalid
-        PromptError: If database operation fails
-    
-    Example:
-        >>> template_id = create_template(
-        ...     "greeting",
-        ...     "Hello {{name}}!",
-        ...     created_by="admin",
-        ...     change_description="Simple greeting template"
-        ... )
-    """
-    # Validate name
+    """Create a new template with version 1."""
     if not name or not name.strip():
         raise PromptError("Template name cannot be empty")
     
-    # Validate syntax (will raise TemplateSyntaxError if invalid)
-    try:
-        env = SandboxedEnvironment()
-        env.parse(content)
-    except Jinja2SyntaxError as e:
-        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
+    _validate_jinja2(content)
     
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Insert template
             cur.execute(
                 """
-                INSERT INTO system_prompt (name, content, current_version)
-                VALUES (%s, %s, 1)
+                INSERT INTO system_prompt (tenant_id, name, content, current_version)
+                VALUES (%s, %s, %s, 1)
                 RETURNING id
                 """,
-                (name, content)
+                (_tid(tenant_id), name, content)
             )
             template_id = cur.fetchone()[0]
             
-            # Insert version 1
             cur.execute(
                 """
                 INSERT INTO prompt_version_history 
-                (template_id, version, content, created_by, change_description)
-                VALUES (%s, 1, %s, %s, %s)
+                (tenant_id, template_id, version, content, created_by, change_description)
+                VALUES (%s, %s, 1, %s, %s, %s)
                 """,
-                (template_id, content, created_by, change_description)
+                (_tid(tenant_id), template_id, content, created_by, change_description)
             )
             
             conn.commit()
-            logger.info(f"Created template '{name}' (id: {template_id})")
             return template_id
             
     except Exception as e:
         conn.rollback()
+        if "unique" in str(e).lower():
+            raise PromptError(f"Template name '{name}' already exists")
         raise PromptError(f"Failed to create template: {e}")
     finally:
         put_conn(conn)
 
 
-def get_template(template_id: int) -> Template:
-    """
-    Get a template by ID.
-    
-    Args:
-        template_id: Template ID
-    
-    Returns:
-        Template object
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-    """
+def get_template(template_id: int, tenant_id: Optional[int] = None) -> Template:
+    """Get a template by ID."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id, name, content, current_version, created_at, updated_at, is_active
-                FROM system_prompt
-                WHERE id = %s
-                """,
-                (template_id,)
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
             )
             row = cur.fetchone()
             if not row:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
-            
-            return Template(
-                id=row[0],
-                name=row[1],
-                content=row[2],
-                current_version=row[3],
-                created_at=row[4],
-                updated_at=row[5],
-                is_active=row[6]
-            )
+            return _row_to_template(row)
     finally:
         put_conn(conn)
 
 
-def get_template_by_name(name: str) -> Template:
-    """
-    Get a template by name.
-    
-    Args:
-        name: Template name
-    
-    Returns:
-        Template object
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-    """
+def get_template_by_name(name: str, tenant_id: Optional[int] = None) -> Template:
+    """Get a template by name."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id, name, content, current_version, created_at, updated_at, is_active
-                FROM system_prompt
-                WHERE name = %s
-                """,
-                (name,)
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE name = %s AND tenant_id = %s",
+                (name, _tid(tenant_id))
             )
             row = cur.fetchone()
             if not row:
                 raise TemplateNotFoundError(f"Template '{name}' not found")
-            
-            return Template(
-                id=row[0],
-                name=row[1],
-                content=row[2],
-                current_version=row[3],
-                created_at=row[4],
-                updated_at=row[5],
-                is_active=row[6]
-            )
+            return _row_to_template(row)
     finally:
         put_conn(conn)
 
 
-def list_templates(include_inactive: bool = False) -> list[Template]:
-    """
-    List all templates.
-    
-    Args:
-        include_inactive: Whether to include inactive templates
-    
-    Returns:
-        List of Template objects
-    """
+def list_templates(include_inactive: bool = False, tenant_id: Optional[int] = None) -> list[Template]:
+    """List templates for a tenant."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            query = """
-                SELECT id, name, content, current_version, created_at, updated_at, is_active
-                FROM system_prompt
-            """
-            if not include_inactive:
-                query += " WHERE is_active = true"
-            query += " ORDER BY name"
-            
-            cur.execute(query)
-            
-            templates = []
-            for row in cur.fetchall():
-                templates.append(Template(
-                    id=row[0],
-                    name=row[1],
-                    content=row[2],
-                    current_version=row[3],
-                    created_at=row[4],
-                    updated_at=row[5],
-                    is_active=row[6]
-                ))
-            return templates
+            if include_inactive:
+                cur.execute(
+                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE tenant_id = %s ORDER BY name",
+                    (_tid(tenant_id),)
+                )
+            else:
+                cur.execute(
+                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE tenant_id = %s AND is_active = true ORDER BY name",
+                    (_tid(tenant_id),)
+                )
+            return [_row_to_template(row) for row in cur.fetchall()]
     finally:
         put_conn(conn)
 
@@ -313,51 +224,18 @@ def update_template(
     template_id: int,
     content: str,
     created_by: Optional[str] = None,
-    change_description: Optional[str] = None
+    change_description: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Update template content (creates new version).
-    
-    This is an immutable operation - the old version is preserved
-    in prompt_version_history and a new version is created.
-    
-    Args:
-        template_id: Template ID
-        content: New template content
-        created_by: Who made this update
-        change_description: Description of what changed
-    
-    Returns:
-        New version number
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-        TemplateSyntaxError: If Jinja2 syntax is invalid
-        PromptError: If database operation fails
-    
-    Example:
-        >>> new_version = update_template(
-        ...     template_id=5,
-        ...     content="Updated: Hello {{name}}!",
-        ...     created_by="admin",
-        ...     change_description="Added greeting prefix"
-        ... )
-        >>> print(f"Created version {new_version}")
-    """
-    # Validate syntax
-    try:
-        env = SandboxedEnvironment()
-        env.parse(content)
-    except Jinja2SyntaxError as e:
-        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
+    """Update template content, creating a new version."""
+    _validate_jinja2(content)
     
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Get current version
             cur.execute(
-                "SELECT current_version FROM system_prompt WHERE id = %s",
-                (template_id,)
+                "SELECT current_version FROM system_prompt WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
             )
             row = cur.fetchone()
             if not row:
@@ -365,31 +243,28 @@ def update_template(
             
             new_version = row[0] + 1
             
-            # Update template
             cur.execute(
                 """
-                UPDATE system_prompt
+                UPDATE system_prompt 
                 SET content = %s, current_version = %s, updated_at = NOW()
-                WHERE id = %s
+                WHERE id = %s AND tenant_id = %s
                 """,
-                (content, new_version, template_id)
+                (content, new_version, template_id, _tid(tenant_id))
             )
             
-            # Insert new version
             cur.execute(
                 """
-                INSERT INTO prompt_version_history
-                (template_id, version, content, created_by, change_description)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO prompt_version_history 
+                (tenant_id, template_id, version, content, created_by, change_description)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (template_id, new_version, content, created_by, change_description)
+                (_tid(tenant_id), template_id, new_version, content, created_by, change_description)
             )
             
             conn.commit()
-            logger.info(f"Updated template {template_id} to version {new_version}")
             return new_version
             
-    except (TemplateNotFoundError, TemplateSyntaxError):
+    except TemplateNotFoundError:
         raise
     except Exception as e:
         conn.rollback()
@@ -398,62 +273,51 @@ def update_template(
         put_conn(conn)
 
 
-def deactivate_template(template_id: int) -> None:
-    """
-    Deactivate a template.
-    
-    Args:
-        template_id: Template ID
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-    """
+def deactivate_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
+    """Deactivate a template (soft delete)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE system_prompt SET is_active = false, updated_at = NOW() WHERE id = %s",
-                (template_id,)
+                "UPDATE system_prompt SET is_active = false, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
             )
             if cur.rowcount == 0:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
             conn.commit()
-            logger.info(f"Deactivated template {template_id}")
-    except TemplateNotFoundError:
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise PromptError(f"Failed to deactivate template: {e}")
+            return True
     finally:
         put_conn(conn)
 
 
-def activate_template(template_id: int) -> None:
-    """
-    Activate a template.
-    
-    Args:
-        template_id: Template ID
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-    """
+def activate_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
+    """Reactivate a deactivated template."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE system_prompt SET is_active = true, updated_at = NOW() WHERE id = %s",
-                (template_id,)
+                "UPDATE system_prompt SET is_active = true, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
             )
             if cur.rowcount == 0:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
             conn.commit()
-            logger.info(f"Activated template {template_id}")
-    except TemplateNotFoundError:
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise PromptError(f"Failed to activate template: {e}")
+            return True
+    finally:
+        put_conn(conn)
+
+
+def delete_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
+    """Hard delete a template and its version history."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM system_prompt WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
+            )
+            conn.commit()
+            return cur.rowcount > 0
     finally:
         put_conn(conn)
 
@@ -462,28 +326,18 @@ def activate_template(template_id: int) -> None:
 # VERSION MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_version_history(template_id: int) -> list[TemplateVersion]:
-    """
-    Get all versions of a template.
-    
-    Args:
-        template_id: Template ID
-    
-    Returns:
-        List of TemplateVersion objects (newest first)
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-    """
+def get_version_history(template_id: int, tenant_id: Optional[int] = None) -> list[TemplateVersion]:
+    """Get all versions of a template."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Verify template exists
-            cur.execute("SELECT 1 FROM system_prompt WHERE id = %s", (template_id,))
+            cur.execute(
+                "SELECT id FROM system_prompt WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
+            )
             if not cur.fetchone():
                 raise TemplateNotFoundError(f"Template {template_id} not found")
             
-            # Get versions
             cur.execute(
                 """
                 SELECT id, template_id, version, content, created_at, created_by, change_description
@@ -493,40 +347,30 @@ def get_version_history(template_id: int) -> list[TemplateVersion]:
                 """,
                 (template_id,)
             )
-            
-            versions = []
-            for row in cur.fetchall():
-                versions.append(TemplateVersion(
-                    id=row[0],
-                    template_id=row[1],
-                    version=row[2],
-                    content=row[3],
-                    created_at=row[4],
-                    created_by=row[5],
+            return [
+                TemplateVersion(
+                    id=row[0], template_id=row[1], version=row[2],
+                    content=row[3], created_at=row[4], created_by=row[5],
                     change_description=row[6]
-                ))
-            return versions
+                )
+                for row in cur.fetchall()
+            ]
     finally:
         put_conn(conn)
 
 
-def get_version(template_id: int, version: int) -> TemplateVersion:
-    """
-    Get a specific version of a template.
-    
-    Args:
-        template_id: Template ID
-        version: Version number
-    
-    Returns:
-        TemplateVersion object
-    
-    Raises:
-        TemplateNotFoundError: If template or version doesn't exist
-    """
+def get_version(template_id: int, version: int, tenant_id: Optional[int] = None) -> TemplateVersion:
+    """Get a specific version of a template."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM system_prompt WHERE id = %s AND tenant_id = %s",
+                (template_id, _tid(tenant_id))
+            )
+            if not cur.fetchone():
+                raise TemplateNotFoundError(f"Template {template_id} not found")
+            
             cur.execute(
                 """
                 SELECT id, template_id, version, content, created_at, created_by, change_description
@@ -537,17 +381,11 @@ def get_version(template_id: int, version: int) -> TemplateVersion:
             )
             row = cur.fetchone()
             if not row:
-                raise TemplateNotFoundError(
-                    f"Template {template_id} version {version} not found"
-                )
+                raise TemplateNotFoundError(f"Version {version} of template {template_id} not found")
             
             return TemplateVersion(
-                id=row[0],
-                template_id=row[1],
-                version=row[2],
-                content=row[3],
-                created_at=row[4],
-                created_by=row[5],
+                id=row[0], template_id=row[1], version=row[2],
+                content=row[3], created_at=row[4], created_by=row[5],
                 change_description=row[6]
             )
     finally:
@@ -557,158 +395,144 @@ def get_version(template_id: int, version: int) -> TemplateVersion:
 def rollback_to_version(
     template_id: int,
     version: int,
-    created_by: Optional[str] = None
+    created_by: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Rollback template to a previous version (creates new version with old content).
-    
-    This doesn't actually delete the newer versions - it creates a NEW version
-    with the content from the specified version. This maintains the full audit trail.
-    
-    Args:
-        template_id: Template ID
-        version: Version number to rollback to
-        created_by: Who performed the rollback
-    
-    Returns:
-        New version number
-    
-    Raises:
-        TemplateNotFoundError: If template or version doesn't exist
-        PromptError: If database operation fails
-    
-    Example:
-        >>> # Template has versions 1, 2, 3
-        >>> new_version = rollback_to_version(template_id, 1, "admin")
-        >>> print(f"Rolled back to v1, created v{new_version}")
-        # Output: "Rolled back to v1, created v4"
-    """
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            # Get the old version's content
-            cur.execute(
-                "SELECT content FROM prompt_version_history WHERE template_id = %s AND version = %s",
-                (template_id, version)
-            )
-            row = cur.fetchone()
-            if not row:
-                raise TemplateNotFoundError(
-                    f"Template {template_id} version {version} not found"
-                )
-            old_content = row[0]
-            
-            # Get current version number
-            cur.execute(
-                "SELECT current_version FROM system_prompt WHERE id = %s",
-                (template_id,)
-            )
-            row = cur.fetchone()
-            if not row:
-                raise TemplateNotFoundError(f"Template {template_id} not found")
-            
-            new_version = row[0] + 1
-            
-            # Update template with old content
-            cur.execute(
-                """
-                UPDATE system_prompt
-                SET content = %s, current_version = %s, updated_at = NOW()
-                WHERE id = %s
-                """,
-                (old_content, new_version, template_id)
-            )
-            
-            # Insert new version with rollback description
-            change_desc = f"Rolled back to version {version}"
-            cur.execute(
-                """
-                INSERT INTO prompt_version_history
-                (template_id, version, content, created_by, change_description)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (template_id, new_version, old_content, created_by, change_desc)
-            )
-            
-            conn.commit()
-            logger.info(f"Rolled back template {template_id} to version {version} (created v{new_version})")
-            return new_version
-            
-    except TemplateNotFoundError:
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise PromptError(f"Failed to rollback template: {e}")
-    finally:
-        put_conn(conn)
+    """Rollback template to a previous version (creates new version with old content)."""
+    old_version = get_version(template_id, version, tenant_id)
+    return update_template(
+        template_id,
+        old_version.content,
+        created_by=created_by,
+        change_description=f"Rollback to version {version}",
+        tenant_id=tenant_id
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# RENDERING
+# TEMPLATE RENDERING
 # ═══════════════════════════════════════════════════════════════════════════
 
-def render_template(template_id: int, variables: Optional[dict[str, Any]] = None) -> str:
-    """
-    Render a template with variables.
+def render_template(
+    template_id: int,
+    variables: Optional[dict[str, Any]] = None,
+    tenant_id: Optional[int] = None
+) -> str:
+    """Render a template with variables."""
+    template = get_template(template_id, tenant_id)
+    return _render_content(template.content, variables)
+
+
+def render_template_by_name(
+    name: str,
+    variables: Optional[dict[str, Any]] = None,
+    tenant_id: Optional[int] = None
+) -> str:
+    """Render a template by name with variables."""
+    template = get_template_by_name(name, tenant_id)
+    return _render_content(template.content, variables)
+
+
+def _render_content(content: str, variables: Optional[dict[str, Any]] = None) -> str:
+    """Internal: render template content with variables."""
+    from jinja2 import StrictUndefined
     
-    Uses Jinja2 SandboxedEnvironment for secure rendering.
-    StrictUndefined means missing variables will raise an error.
-    
-    Args:
-        template_id: Template ID
-        variables: Dict of variables to pass to template
-    
-    Returns:
-        Rendered template string
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-        TemplateRenderError: If rendering fails
-    
-    Example:
-        >>> rendered = render_template(
-        ...     template_id=5,
-        ...     variables={"name": "World", "greeting": "Hello"}
-        ... )
-        >>> print(rendered)
-        Hello World!
-    """
     if variables is None:
         variables = {}
     
-    template = get_template(template_id)
-    
     try:
         env = SandboxedEnvironment(undefined=StrictUndefined)
-        jinja_template = env.from_string(template.content)
-        return jinja_template.render(**variables)
+        template = env.from_string(content)
+        return template.render(**variables)
+    except Jinja2SyntaxError as e:
+        raise TemplateSyntaxError(f"Invalid Jinja2 syntax: {e}")
     except Exception as e:
         raise TemplateRenderError(f"Failed to render template: {e}")
 
 
-def render_template_by_name(name: str, variables: Optional[dict[str, Any]] = None) -> str:
-    """
-    Render a template by name with variables.
-    
-    Args:
-        name: Template name
-        variables: Dict of variables to pass to template
-    
-    Returns:
-        Rendered template string
-    
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-        TemplateRenderError: If rendering fails
-    
-    Example:
-        >>> rendered = render_template_by_name(
-        ...     "greeting",
-        ...     {"name": "World"}
-        ... )
-    """
-    if variables is None:
-        variables = {}
-    
-    template = get_template_by_name(name)
-    return render_template(template.id, variables)
+# ═══════════════════════════════════════════════════════════════════════════
+# TEMPLATE SHARING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def set_template_shareable(template_id: int, is_shareable: bool, tenant_id: Optional[int] = None) -> bool:
+    """Set whether a template is shareable."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE system_prompt SET is_shareable = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+                (is_shareable, template_id, _tid(tenant_id))
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        put_conn(conn)
+
+
+def list_shared_templates() -> list[Template]:
+    """List all shareable templates."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE is_shareable = true AND is_active = true ORDER BY name"
+            )
+            return [_row_to_template(row) for row in cur.fetchall()]
+    finally:
+        put_conn(conn)
+
+
+def clone_template(source_template_id: int, tenant_id: int, new_name: Optional[str] = None) -> int:
+    """Clone a shared template into a tenant's space."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # First check if template exists at all
+            cur.execute(
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE id = %s",
+                (source_template_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                raise TemplateNotFoundError(f"Template {source_template_id} not found")
+            
+            source = _row_to_template(row)
+            if not source.is_shareable:
+                raise PromptError(f"Template {source_template_id} is not shareable")
+            
+            clone_name = new_name or f"{source.name}_clone"
+            
+            cur.execute(
+                """
+                INSERT INTO system_prompt 
+                (tenant_id, name, content, current_version, cloned_from_id, cloned_from_tenant)
+                VALUES (%s, %s, %s, 1, %s, %s)
+                RETURNING id
+                """,
+                (_tid(tenant_id), clone_name, source.content, source_template_id, source.tenant_id)
+            )
+            new_id = cur.fetchone()[0]
+            
+            cur.execute(
+                """
+                INSERT INTO prompt_version_history 
+                (tenant_id, template_id, version, content, created_by, change_description)
+                VALUES (%s, %s, 1, %s, %s, %s)
+                """,
+                (_tid(tenant_id), new_id, source.content, "system", f"Cloned from template {source_template_id}")
+            )
+            
+            conn.commit()
+            return new_id
+            
+    except TemplateNotFoundError:
+        raise
+    except PromptError:
+        raise
+    except Exception as e:
+        conn.rollback()
+        if "unique" in str(e).lower():
+            raise PromptError(f"Template name already exists")
+        raise PromptError(f"Failed to clone template: {e}")
+    finally:
+        put_conn(conn)

@@ -6,21 +6,7 @@ This module provides:
 - User memory (JSONB key-value storage for preferences, context)
 - User state management (mode tracking)
 - Retrieval with filtering and limits
-- Automatic timestamp management
-
-Example:
-    >>> # Store conversation
-    >>> add_message("user123", "user", "Hello!")
-    >>> add_message("user123", "assistant", "Hi there!")
-    >>> 
-    >>> # Retrieve history
-    >>> history = get_conversation_history("user123", limit=10)
-    >>> 
-    >>> # Store user preferences
-    >>> set_memory("user123", "language", {"preference": "en", "proficiency": "native"})
-    >>> 
-    >>> # Retrieve memory
-    >>> lang = get_memory("user123", "language")
+- Multi-tenant isolation
 """
 
 import logging
@@ -75,7 +61,7 @@ class UserMemory(BaseModel):
     id: int
     user_id: str = Field(..., min_length=1)
     key: str = Field(..., min_length=1)
-    value: dict[str, Any]  # JSONB stored as dict
+    value: dict[str, Any]
     updated_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
@@ -92,32 +78,25 @@ class UserState(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# HELPER: Default tenant_id for SQL
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _tid(tenant_id: Optional[int]) -> int:
+    """Convert None tenant_id to 0 for SQL operations."""
+    return tenant_id if tenant_id is not None else 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CONVERSATION HISTORY
 # ═══════════════════════════════════════════════════════════════════════════
 
 def add_message(
     user_id: str,
     role: str,
-    content: str
+    content: str,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Add a message to conversation history.
-    
-    Args:
-        user_id: User identifier
-        role: Message role ('user' or 'assistant')
-        content: Message content
-    
-    Returns:
-        Message ID
-    
-    Raises:
-        InvalidRoleError: If role is not 'user' or 'assistant'
-        MemoryError: If database operation fails
-    
-    Example:
-        >>> msg_id = add_message("user123", "user", "Hello!")
-    """
+    """Add a message to conversation history."""
     if role not in ("user", "assistant"):
         raise InvalidRoleError(f"Invalid role '{role}', must be 'user' or 'assistant'")
     
@@ -126,15 +105,14 @@ def add_message(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO conversation_history (user_id, role, content)
-                VALUES (%s, %s, %s)
+                INSERT INTO conversation_history (tenant_id, user_id, role, content)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (user_id, role, content)
+                (_tid(tenant_id), user_id, role, content)
             )
             message_id = cur.fetchone()[0]
             conn.commit()
-            logger.debug(f"Added message {message_id} for user {user_id}")
             return message_id
     except Exception as e:
         conn.rollback()
@@ -146,35 +124,20 @@ def add_message(
 def get_conversation_history(
     user_id: str,
     limit: Optional[int] = None,
-    offset: int = 0
+    offset: int = 0,
+    tenant_id: Optional[int] = None
 ) -> list[ConversationMessage]:
-    """
-    Get conversation history for a user.
-    
-    Returns messages in reverse chronological order (newest first).
-    
-    Args:
-        user_id: User identifier
-        limit: Maximum number of messages to return
-        offset: Number of messages to skip
-    
-    Returns:
-        List of ConversationMessage objects (newest first)
-    
-    Example:
-        >>> # Get last 10 messages
-        >>> history = get_conversation_history("user123", limit=10)
-    """
+    """Get conversation history for a user (newest first)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             query = """
                 SELECT id, user_id, role, content, created_at
                 FROM conversation_history
-                WHERE user_id = %s
+                WHERE tenant_id = %s AND user_id = %s
                 ORDER BY created_at DESC
             """
-            params = [user_id]
+            params = [_tid(tenant_id), user_id]
             
             if limit is not None:
                 query += " LIMIT %s"
@@ -186,40 +149,23 @@ def get_conversation_history(
             
             cur.execute(query, params)
             
-            messages = []
-            for row in cur.fetchall():
-                messages.append(ConversationMessage(
-                    id=row[0],
-                    user_id=row[1],
-                    role=row[2],
-                    content=row[3],
-                    created_at=row[4]
-                ))
-            return messages
+            return [
+                ConversationMessage(
+                    id=row[0], user_id=row[1], role=row[2],
+                    content=row[3], created_at=row[4]
+                )
+                for row in cur.fetchall()
+            ]
     finally:
         put_conn(conn)
 
 
 def get_recent_messages(
     user_id: str,
-    count: int = 10
+    count: int = 10,
+    tenant_id: Optional[int] = None
 ) -> list[ConversationMessage]:
-    """
-    Get recent messages in chronological order (oldest first).
-    
-    This is for building prompts where you need chronological order.
-    
-    Args:
-        user_id: User identifier
-        count: Number of recent messages to retrieve
-    
-    Returns:
-        List of ConversationMessage objects (oldest first)
-    
-    Example:
-        >>> # Get last 10 messages for prompt context
-        >>> history = get_recent_messages("user123", count=10)
-    """
+    """Get recent messages in chronological order (oldest first)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -227,74 +173,50 @@ def get_recent_messages(
                 """
                 SELECT id, user_id, role, content, created_at
                 FROM conversation_history
-                WHERE user_id = %s
+                WHERE tenant_id = %s AND user_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (user_id, count)
+                (_tid(tenant_id), user_id, count)
             )
             
-            messages = []
-            for row in cur.fetchall():
-                messages.append(ConversationMessage(
-                    id=row[0],
-                    user_id=row[1],
-                    role=row[2],
-                    content=row[3],
-                    created_at=row[4]
-                ))
-            # Reverse to get chronological order (oldest first)
+            messages = [
+                ConversationMessage(
+                    id=row[0], user_id=row[1], role=row[2],
+                    content=row[3], created_at=row[4]
+                )
+                for row in cur.fetchall()
+            ]
             return list(reversed(messages))
     finally:
         put_conn(conn)
 
 
-def count_messages(user_id: str) -> int:
-    """
-    Count messages for a user.
-    
-    Args:
-        user_id: User identifier
-    
-    Returns:
-        Total message count
-    """
+def count_messages(user_id: str, tenant_id: Optional[int] = None) -> int:
+    """Count messages for a user."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM conversation_history WHERE user_id = %s",
-                (user_id,)
+                "SELECT COUNT(*) FROM conversation_history WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
             )
             return cur.fetchone()[0]
     finally:
         put_conn(conn)
 
 
-def clear_conversation_history(user_id: str) -> int:
-    """
-    Clear all conversation history for a user.
-    
-    Args:
-        user_id: User identifier
-    
-    Returns:
-        Number of messages deleted
-    
-    Example:
-        >>> deleted = clear_conversation_history("user123")
-        >>> print(f"Deleted {deleted} messages")
-    """
+def clear_conversation_history(user_id: str, tenant_id: Optional[int] = None) -> int:
+    """Clear all conversation history for a user."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM conversation_history WHERE user_id = %s",
-                (user_id,)
+                "DELETE FROM conversation_history WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
             )
             deleted = cur.rowcount
             conn.commit()
-            logger.info(f"Cleared {deleted} messages for user {user_id}")
             return deleted
     except Exception as e:
         conn.rollback()
@@ -303,28 +225,18 @@ def clear_conversation_history(user_id: str) -> int:
         put_conn(conn)
 
 
-def delete_message(message_id: int) -> None:
-    """
-    Delete a specific message.
-    
-    Args:
-        message_id: Message ID to delete
-    
-    Raises:
-        MemoryNotFoundError: If message doesn't exist
-        MemoryError: If database operation fails
-    """
+def delete_message(message_id: int, tenant_id: Optional[int] = None) -> None:
+    """Delete a specific message."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM conversation_history WHERE id = %s",
-                (message_id,)
+                "DELETE FROM conversation_history WHERE id = %s AND tenant_id = %s",
+                (message_id, _tid(tenant_id))
             )
             if cur.rowcount == 0:
                 raise MemoryNotFoundError(f"Message {message_id} not found")
             conn.commit()
-            logger.debug(f"Deleted message {message_id}")
     except MemoryNotFoundError:
         raise
     except Exception as e:
@@ -341,53 +253,25 @@ def delete_message(message_id: int) -> None:
 def set_memory(
     user_id: str,
     key: str,
-    value: dict[str, Any]
+    value: Any,
+    tenant_id: Optional[int] = None
 ) -> int:
-    """
-    Set or update a user memory entry.
-    
-    Args:
-        user_id: User identifier
-        key: Memory key (e.g., 'preferences', 'context', 'profile')
-        value: Memory value as dict (stored as JSONB)
-    
-    Returns:
-        Memory entry ID
-    
-    Raises:
-        MemoryError: If database operation fails
-    
-    Example:
-        >>> # Store user preferences
-        >>> set_memory("user123", "preferences", {
-        ...     "language": "en",
-        ...     "theme": "dark",
-        ...     "notifications": True
-        ... })
-        >>> 
-        >>> # Store conversation context
-        >>> set_memory("user123", "context", {
-        ...     "topic": "Python debugging",
-        ...     "expertise_level": "intermediate"
-        ... })
-    """
+    """Set or update a user memory entry."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Upsert: insert or update if key exists
             cur.execute(
                 """
-                INSERT INTO user_memory (user_id, key, value)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id, key) 
+                INSERT INTO user_memory (tenant_id, user_id, key, value)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (tenant_id, user_id, key) 
                 DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
                 RETURNING id
                 """,
-                (user_id, key, json.dumps(value))
+                (_tid(tenant_id), user_id, key, json.dumps(value))
             )
             memory_id = cur.fetchone()[0]
             conn.commit()
-            logger.debug(f"Set memory '{key}' for user {user_id}")
             return memory_id
     except Exception as e:
         conn.rollback()
@@ -398,29 +282,16 @@ def set_memory(
 
 def get_memory(
     user_id: str,
-    key: str
-) -> Optional[dict[str, Any]]:
-    """
-    Get a user memory entry.
-    
-    Args:
-        user_id: User identifier
-        key: Memory key
-    
-    Returns:
-        Memory value as dict, or None if not found
-    
-    Example:
-        >>> prefs = get_memory("user123", "preferences")
-        >>> if prefs:
-        ...     print(f"Language: {prefs['language']}")
-    """
+    key: str,
+    tenant_id: Optional[int] = None
+) -> Optional[Any]:
+    """Get a user memory entry."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT value FROM user_memory WHERE user_id = %s AND key = %s",
-                (user_id, key)
+                "SELECT value FROM user_memory WHERE tenant_id = %s AND user_id = %s AND key = %s",
+                (_tid(tenant_id), user_id, key)
             )
             row = cur.fetchone()
             return row[0] if row else None
@@ -428,21 +299,8 @@ def get_memory(
         put_conn(conn)
 
 
-def get_all_memory(user_id: str) -> list[UserMemory]:
-    """
-    Get all memory entries for a user.
-    
-    Args:
-        user_id: User identifier
-    
-    Returns:
-        List of all user memory entries
-    
-    Example:
-        >>> memories = get_all_memory("user123")
-        >>> for mem in memories:
-        ...     print(f"{mem.key}: {mem.value}")
-    """
+def get_all_memory(user_id: str, tenant_id: Optional[int] = None) -> list[UserMemory]:
+    """Get all memory entries for a user."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -450,52 +308,34 @@ def get_all_memory(user_id: str) -> list[UserMemory]:
                 """
                 SELECT id, user_id, key, value, updated_at
                 FROM user_memory
-                WHERE user_id = %s
+                WHERE tenant_id = %s AND user_id = %s
                 ORDER BY key
                 """,
-                (user_id,)
+                (_tid(tenant_id), user_id)
             )
-            rows = cur.fetchall()
             return [
                 UserMemory(
-                    id=row[0],
-                    user_id=row[1],
-                    key=row[2],
-                    value=row[3],
-                    updated_at=row[4]
+                    id=row[0], user_id=row[1], key=row[2],
+                    value=row[3], updated_at=row[4]
                 )
-                for row in rows
+                for row in cur.fetchall()
             ]
     finally:
         put_conn(conn)
 
 
-def delete_memory(
-    user_id: str,
-    key: str
-) -> None:
-    """
-    Delete a user memory entry.
-    
-    Args:
-        user_id: User identifier
-        key: Memory key to delete
-    
-    Raises:
-        MemoryNotFoundError: If memory entry doesn't exist
-        MemoryError: If database operation fails
-    """
+def delete_memory(user_id: str, key: str, tenant_id: Optional[int] = None) -> None:
+    """Delete a user memory entry."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM user_memory WHERE user_id = %s AND key = %s",
-                (user_id, key)
+                "DELETE FROM user_memory WHERE tenant_id = %s AND user_id = %s AND key = %s",
+                (_tid(tenant_id), user_id, key)
             )
             if cur.rowcount == 0:
                 raise MemoryNotFoundError(f"Memory '{key}' not found for user {user_id}")
             conn.commit()
-            logger.debug(f"Deleted memory '{key}' for user {user_id}")
     except MemoryNotFoundError:
         raise
     except Exception as e:
@@ -505,26 +345,17 @@ def delete_memory(
         put_conn(conn)
 
 
-def clear_all_memory(user_id: str) -> int:
-    """
-    Clear all memory entries for a user.
-    
-    Args:
-        user_id: User identifier
-    
-    Returns:
-        Number of entries deleted
-    """
+def clear_all_memory(user_id: str, tenant_id: Optional[int] = None) -> int:
+    """Clear all memory entries for a user."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM user_memory WHERE user_id = %s",
-                (user_id,)
+                "DELETE FROM user_memory WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
             )
             deleted = cur.rowcount
             conn.commit()
-            logger.info(f"Cleared {deleted} memory entries for user {user_id}")
             return deleted
     except Exception as e:
         conn.rollback()
@@ -537,31 +368,21 @@ def clear_all_memory(user_id: str) -> int:
 # USER STATE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def set_user_state(user_id: str, mode: str) -> None:
-    """
-    Set user state (upserts).
-    
-    Args:
-        user_id: User identifier
-        mode: State mode string
-    
-    Example:
-        >>> set_user_state("user123", "active")
-    """
+def set_user_state(user_id: str, mode: str, tenant_id: Optional[int] = None) -> None:
+    """Set user state (upserts)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO user_state (user_id, mode)
-                VALUES (%s, %s)
-                ON CONFLICT (user_id) 
+                INSERT INTO user_state (tenant_id, user_id, mode)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (tenant_id, user_id) 
                 DO UPDATE SET mode = EXCLUDED.mode, updated_at = NOW()
                 """,
-                (user_id, mode)
+                (_tid(tenant_id), user_id, mode)
             )
             conn.commit()
-            logger.debug(f"Set state '{mode}' for user {user_id}")
     except Exception as e:
         conn.rollback()
         raise MemoryError(f"Failed to set state: {e}")
@@ -569,66 +390,160 @@ def set_user_state(user_id: str, mode: str) -> None:
         put_conn(conn)
 
 
-def get_user_state(user_id: str) -> Optional[UserState]:
-    """
-    Get user state.
-    
-    Args:
-        user_id: User identifier
-    
-    Returns:
-        UserState object or None if not found
-    
-    Example:
-        >>> state = get_user_state("user123")
-        >>> if state and state.mode == "active":
-        ...     print("User is active")
-    """
+def get_user_state(user_id: str, tenant_id: Optional[int] = None) -> Optional[UserState]:
+    """Get user state."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id, mode, updated_at FROM user_state WHERE user_id = %s",
-                (user_id,)
+                "SELECT user_id, mode, updated_at FROM user_state WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
             )
             row = cur.fetchone()
             if not row:
                 return None
-            return UserState(
-                user_id=row[0],
-                mode=row[1],
-                updated_at=row[2]
-            )
+            return UserState(user_id=row[0], mode=row[1], updated_at=row[2])
     finally:
         put_conn(conn)
 
 
-def delete_user_state(user_id: str) -> None:
-    """
-    Delete user state.
-    
-    Args:
-        user_id: User identifier
-    
-    Raises:
-        MemoryNotFoundError: If state doesn't exist
-        MemoryError: If database operation fails
-    """
+def delete_user_state(user_id: str, tenant_id: Optional[int] = None) -> None:
+    """Delete user state."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM user_state WHERE user_id = %s",
-                (user_id,)
+                "DELETE FROM user_state WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
             )
             if cur.rowcount == 0:
                 raise MemoryNotFoundError(f"State for user {user_id} not found")
             conn.commit()
-            logger.debug(f"Deleted state for user {user_id}")
     except MemoryNotFoundError:
         raise
     except Exception as e:
         conn.rollback()
         raise MemoryError(f"Failed to delete state: {e}")
+    finally:
+        put_conn(conn)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-TENANT EXTENSIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def list_users(tenant_id: Optional[int] = None) -> list[dict]:
+    """List all users with conversation activity."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, COUNT(*) as msg_count, 
+                       MIN(created_at) as first_seen,
+                       MAX(created_at) as last_seen
+                FROM conversation_history
+                WHERE tenant_id = %s
+                GROUP BY user_id
+                ORDER BY last_seen DESC
+                """,
+                (_tid(tenant_id),)
+            )
+            
+            return [
+                {
+                    "user_id": row[0],
+                    "message_count": row[1],
+                    "first_seen": row[2].isoformat() if row[2] else None,
+                    "last_seen": row[3].isoformat() if row[3] else None
+                }
+                for row in cur.fetchall()
+            ]
+    finally:
+        put_conn(conn)
+
+
+def halt_user(user_id: str, reason: str, halted_by: str, tenant_id: Optional[int] = None) -> None:
+    """Halt a user's conversation."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_state (tenant_id, user_id, mode, is_halted, halt_reason, halted_by, halted_at)
+                VALUES (%s, %s, 'halted', true, %s, %s, NOW())
+                ON CONFLICT (tenant_id, user_id) 
+                DO UPDATE SET is_halted = true, halt_reason = EXCLUDED.halt_reason, 
+                              halted_by = EXCLUDED.halted_by, halted_at = NOW(), updated_at = NOW()
+                """,
+                (_tid(tenant_id), user_id, reason, halted_by)
+            )
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to halt user: {e}")
+    finally:
+        put_conn(conn)
+
+
+def resume_user(user_id: str, tenant_id: Optional[int] = None) -> None:
+    """Resume a halted user's conversation."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE user_state 
+                SET is_halted = false, halt_reason = NULL, halted_by = NULL, halted_at = NULL, updated_at = NOW()
+                WHERE tenant_id = %s AND user_id = %s
+                """,
+                (_tid(tenant_id), user_id)
+            )
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to resume user: {e}")
+    finally:
+        put_conn(conn)
+
+
+def is_user_halted(user_id: str, tenant_id: Optional[int] = None) -> bool:
+    """Check if user is halted."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT is_halted FROM user_state WHERE tenant_id = %s AND user_id = %s",
+                (_tid(tenant_id), user_id)
+            )
+            row = cur.fetchone()
+            return row[0] if row else False
+    finally:
+        put_conn(conn)
+
+
+def list_halted_users(tenant_id: Optional[int] = None) -> list[dict]:
+    """List all halted users."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, halt_reason, halted_by, halted_at
+                FROM user_state
+                WHERE tenant_id = %s AND is_halted = true
+                """,
+                (_tid(tenant_id),)
+            )
+            
+            return [
+                {
+                    "user_id": row[0],
+                    "halt_reason": row[1],
+                    "halted_by": row[2],
+                    "halted_at": row[3].isoformat() if row[3] else None
+                }
+                for row in cur.fetchall()
+            ]
     finally:
         put_conn(conn)

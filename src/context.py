@@ -7,17 +7,6 @@ This module combines:
 - Conversation history (from memory.py)
 
 Into a final rendered prompt ready for the LLM.
-
-Example:
-    >>> # Build complete prompt
-    >>> prompt = build_prompt_context(
-    ...     user_id="user123",
-    ...     template_name="chatbot",
-    ...     history_limit=10
-    ... )
-    >>>
-    >>> # Use with LLM
-    >>> response = await call_mistral(prompt)
 """
 
 import logging
@@ -63,30 +52,13 @@ def format_history_for_template(
     messages: list[ConversationMessage],
     format_style: str = "default"
 ) -> list[dict[str, str]]:
-    """
-    Format conversation messages for template rendering.
-
-    Args:
-        messages: List of conversation messages (chronological order)
-        format_style: Formatting style ('default', 'compact', 'detailed')
-
-    Returns:
-        List of dicts with 'role' and 'content' keys
-
-    Example:
-        >>> messages = get_recent_messages("user123", 5)
-        >>> formatted = format_history_for_template(messages)
-        >>> # [{"role": "user", "content": "Hello"}, ...]
-    """
+    """Format conversation messages for template rendering."""
     if format_style == "compact":
-        # Just role and content, no timestamps
         return [
             {"role": msg.role, "content": msg.content}
             for msg in messages
         ]
-
     elif format_style == "detailed":
-        # Include timestamps and IDs
         return [
             {
                 "role": msg.role,
@@ -96,8 +68,7 @@ def format_history_for_template(
             }
             for msg in messages
         ]
-
-    else:  # default
+    else:
         return [
             {"role": msg.role, "content": msg.content}
             for msg in messages
@@ -108,27 +79,7 @@ def format_history_as_text(
     messages: list[ConversationMessage],
     include_roles: bool = True
 ) -> str:
-    """
-    Format conversation messages as plain text.
-
-    Useful for templates that want history as a single string
-    rather than structured data.
-
-    Args:
-        messages: List of conversation messages (chronological order)
-        include_roles: Include "User:" and "Assistant:" labels
-
-    Returns:
-        Formatted text string
-
-    Example:
-        >>> messages = get_recent_messages("user123", 3)
-        >>> text = format_history_as_text(messages)
-        >>> print(text)
-        User: Hello
-        Assistant: Hi there!
-        User: How are you?
-    """
+    """Format conversation messages as plain text."""
     if not messages:
         return ""
 
@@ -148,20 +99,7 @@ def format_history_as_text(
 # ═══════════════════════════════════════════════════════════════════════════
 
 def format_memory_for_template(memories: list) -> dict[str, Any]:
-    """
-    Format user memories as a dict for template rendering.
-
-    Args:
-        memories: List of UserMemory objects
-
-    Returns:
-        Dict mapping memory keys to values
-
-    Example:
-        >>> memories = get_all_memory("user123")
-        >>> formatted = format_memory_for_template(memories)
-        >>> # {"preferences": {...}, "context": {...}}
-    """
+    """Format user memories as a dict for template rendering."""
     return {mem.key: mem.value for mem in memories}
 
 
@@ -173,37 +111,12 @@ def build_context_variables(
     user_id: str,
     history_limit: int = 10,
     include_memory: bool = True,
-    include_state: bool = True
+    include_state: bool = True,
+    tenant_id: Optional[int] = None
 ) -> dict[str, Any]:
-    """
-    Gather all context data for a user.
-
-    Args:
-        user_id: User identifier
-        history_limit: Number of recent messages to include
-        include_memory: Include user memory in context
-        include_state: Include user state in context
-
-    Returns:
-        Dict of template variables:
-        {
-            "user_id": str,
-            "history": list[dict],
-            "history_text": str,
-            "memory": dict,
-            "state": str | None,
-            "timestamp": str
-        }
-
-    Example:
-        >>> variables = build_context_variables("user123", history_limit=5)
-        >>> variables["user_id"]
-        'user123'
-        >>> variables["history"]
-        [{"role": "user", "content": "Hello"}, ...]
-    """
+    """Gather all context data for a user."""
     # Get conversation history
-    messages = get_recent_messages(user_id, count=history_limit)
+    messages = get_recent_messages(user_id, count=history_limit, tenant_id=tenant_id)
 
     # Format history in multiple ways for template flexibility
     history = format_history_for_template(messages, format_style="default")
@@ -212,13 +125,13 @@ def build_context_variables(
     # Get user memory
     memory = {}
     if include_memory:
-        memories = get_all_memory(user_id)
+        memories = get_all_memory(user_id, tenant_id=tenant_id)
         memory = format_memory_for_template(memories)
 
     # Get user state
     state = None
     if include_state:
-        user_state = get_user_state(user_id)
+        user_state = get_user_state(user_id, tenant_id=tenant_id)
         if user_state:
             state = user_state.mode
 
@@ -239,53 +152,21 @@ def build_prompt_context(
     template_name: str,
     history_limit: int = 10,
     additional_variables: Optional[dict[str, Any]] = None,
-    guardrail_config: Optional[str] = None
+    guardrail_config: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> str:
-    """
-    Build complete prompt from template, memory, and history.
-
-    This is the main function for assembling prompts. It:
-    1. Gets the template by name
-    2. Gathers user context (history, memory, state)
-    3. Combines with any additional variables
-    4. Renders the template
-
-    Args:
-        user_id: User identifier
-        template_name: Name of template to use
-        history_limit: Number of recent messages to include
-        additional_variables: Extra variables to pass to template
-        guardrail_config: Optional guardrail config name to apply
-
-    Returns:
-        Rendered prompt string ready for LLM
-
-    Raises:
-        TemplateNotFoundError: If template doesn't exist
-        ContextBuildError: If context building fails
-
-    Example:
-        >>> # Simple usage
-        >>> prompt = build_prompt_context("user123", "chatbot")
-        >>>
-        >>> # With additional variables
-        >>> prompt = build_prompt_context(
-        ...     "user123",
-        ...     "code_assistant",
-        ...     history_limit=20,
-        ...     additional_variables={"language": "Python"}
-        ... )
-    """
+    """Build complete prompt from template, memory, and history."""
     try:
         # Get template
-        template = get_template_by_name(template_name)
+        template = get_template_by_name(template_name, tenant_id=tenant_id)
 
         # Build context variables
         variables = build_context_variables(
             user_id,
             history_limit=history_limit,
             include_memory=True,
-            include_state=True
+            include_state=True,
+            tenant_id=tenant_id
         )
 
         # Merge with additional variables (additional takes precedence)
@@ -293,7 +174,7 @@ def build_prompt_context(
             variables.update(additional_variables)
 
         # Render template
-        rendered = render_template(template.id, variables)
+        rendered = render_template(template.id, variables, tenant_id=tenant_id)
 
         logger.info(
             f"Built prompt context for user {user_id} using template '{template_name}' "
@@ -302,7 +183,7 @@ def build_prompt_context(
 
         # Apply guardrails if specified
         if guardrail_config:
-            rendered = apply_guardrails(rendered, guardrail_config)
+            rendered = apply_guardrails(rendered, guardrail_config, tenant_id=tenant_id)
 
         return rendered
 
@@ -316,35 +197,16 @@ def build_prompt_context_simple(
     user_id: str,
     template_name: str,
     user_message: str,
-    guardrail_config: Optional[str] = None
+    guardrail_config: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> str:
-    """
-    Simplified context builder for immediate user message.
-
-    Convenience function that adds the current user message
-    as a variable for the template.
-
-    Args:
-        user_id: User identifier
-        template_name: Name of template to use
-        user_message: Current user message (not yet saved)
-        guardrail_config: Optional guardrail config name to apply
-
-    Returns:
-        Rendered prompt string
-
-    Example:
-        >>> prompt = build_prompt_context_simple(
-        ...     "user123",
-        ...     "chatbot",
-        ...     "What is Python?"
-        ... )
-    """
+    """Simplified context builder for immediate user message."""
     return build_prompt_context(
         user_id,
         template_name,
         additional_variables={"current_message": user_message},
-        guardrail_config=guardrail_config
+        guardrail_config=guardrail_config,
+        tenant_id=tenant_id
     )
 
 
@@ -352,34 +214,17 @@ def build_prompt_context_simple(
 # CONTEXT INSPECTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_context_summary(user_id: str) -> dict[str, Any]:
-    """
-    Get summary of available context for a user.
-
-    Useful for debugging or showing user their context.
-
-    Args:
-        user_id: User identifier
-
-    Returns:
-        Dict with context statistics
-
-    Example:
-        >>> summary = get_context_summary("user123")
-        >>> print(f"User has {summary['message_count']} messages")
-        >>> print(f"Memory keys: {summary['memory_keys']}")
-    """
-    from src.memory import count_messages
-
+def get_context_summary(user_id: str, tenant_id: Optional[int] = None) -> dict[str, Any]:
+    """Get summary of available context for a user."""
     # Count messages
-    message_count = count_messages(user_id)
+    message_count = count_messages(user_id, tenant_id=tenant_id)
 
     # Get memory keys
-    memories = get_all_memory(user_id)
+    memories = get_all_memory(user_id, tenant_id=tenant_id)
     memory_keys = [m.key for m in memories]
 
     # Get state
-    user_state = get_user_state(user_id)
+    user_state = get_user_state(user_id, tenant_id=tenant_id)
     state = user_state.mode if user_state else None
 
     return {
@@ -395,40 +240,23 @@ def get_context_summary(user_id: str) -> dict[str, Any]:
 def preview_prompt_context(
     user_id: str,
     template_name: str,
-    history_limit: int = 10
+    history_limit: int = 10,
+    tenant_id: Optional[int] = None
 ) -> dict[str, Any]:
-    """
-    Preview what would be sent to LLM without actually rendering.
-
-    Useful for debugging template issues.
-
-    Args:
-        user_id: User identifier
-        template_name: Name of template to use
-        history_limit: Number of recent messages to include
-
-    Returns:
-        Dict with template info and variables
-
-    Example:
-        >>> preview = preview_prompt_context("user123", "chatbot")
-        >>> print(preview["template_content"][:100])
-        >>> print(preview["variables"].keys())
-    """
-    # Get template
-    template = get_template_by_name(template_name)
-
-    # Build variables
+    """Preview what context would be used for a prompt."""
+    template = get_template_by_name(template_name, tenant_id=tenant_id)
     variables = build_context_variables(
         user_id,
-        history_limit=history_limit
+        history_limit=history_limit,
+        tenant_id=tenant_id
     )
-
+    
     return {
-        "template_id": template.id,
         "template_name": template.name,
-        "template_content": template.content,
+        "template_id": template.id,
         "template_version": template.current_version,
+        "template_content": template.content,
         "variables": variables,
-        "variable_keys": list(variables.keys())
+        "variable_keys": list(variables.keys()),
+        "would_render": True
     }
