@@ -368,34 +368,34 @@ class TestTenantIsolation:
 class TestFastAPIDependencies:
     """Test FastAPI auth dependencies."""
     
-    def test_get_current_admin_no_session(self, db_module):
-        import asyncio
+    @pytest.mark.asyncio
+    async def test_get_current_admin_no_session(self, db_module):
         from fastapi import HTTPException
         from src.auth import get_current_admin
         
         with pytest.raises(HTTPException) as exc:
-            asyncio.get_event_loop().run_until_complete(get_current_admin(session=None))
+            await get_current_admin(session=None)
         
         assert exc.value.status_code == 401
     
-    def test_get_current_admin_invalid_session(self, db_module):
-        import asyncio
+    @pytest.mark.asyncio
+    async def test_get_current_admin_invalid_session(self, db_module):
         from fastapi import HTTPException
         from src.auth import get_current_admin
         
         with pytest.raises(HTTPException) as exc:
-            asyncio.get_event_loop().run_until_complete(get_current_admin(session="invalid"))
+            await get_current_admin(session="invalid")
         
         assert exc.value.status_code == 401
     
-    def test_get_current_admin_valid_session(self, db_module):
-        import asyncio
+    @pytest.mark.asyncio
+    async def test_get_current_admin_valid_session(self, db_module):
         from src.auth import create_admin, create_session_token, get_current_admin
         
         admin_id = create_admin("dep@example.com", "password123")
         token = create_session_token(admin_id=admin_id, email="dep@example.com", is_super=False)
         
-        admin = asyncio.get_event_loop().run_until_complete(get_current_admin(session=token))
+        admin = await get_current_admin(session=token)
         
         assert admin.email == "dep@example.com"
         assert admin.tenant_id == admin_id
