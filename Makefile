@@ -54,9 +54,13 @@ help:
 	@echo "🧪 TESTING (requires llm=local|venice)"
 	@echo "  make test llm=...    Run tests with specified LLM"
 	@echo ""
+	@echo "👤 ADMIN MANAGEMENT"
+	@echo "  make admin-create db=... email=... password=...  Create admin"
+	@echo "  make admin-list db=...                           List all admins"
+	@echo "  make admin-deactivate db=... email=...           Deactivate admin"
+	@echo ""
 	@echo "🔧 UTILITIES"
 	@echo "  make health                       Check backend health"
-	@echo "  make admin-create db=... user=... Create admin user"
 	@echo "  make clean                        Clean Python cache files"
 	@echo ""
 
@@ -111,24 +115,18 @@ db-drop-remote:
 
 db-migrate: check-db
 ifeq ($(db),local)
-ifndef llm
-	$(error llm= is required for db=local. Use llm=local or llm=venice)
-endif
-	@LLM_BACKEND=$(llm) docker compose --profile local up -d postgres backend 2>/dev/null || true
+	@set -a && source .env && set +a && docker compose up -d postgres 2>/dev/null || true
 	@sleep 2
-	@LLM_BACKEND=$(llm) docker compose --profile local exec backend uv run python -m scripts.migrate
+	@uv run python -m scripts.migrate
 else ifeq ($(db),remote)
 	@DB_TARGET=$(db) uv run python -m scripts.migrate
 endif
 
 db-inspect: check-db
 ifeq ($(db),local)
-ifndef llm
-	$(error llm= is required for db=local. Use llm=local or llm=venice)
-endif
-	@LLM_BACKEND=$(llm) docker compose --profile local up -d postgres backend 2>/dev/null || true
+	@set -a && source .env && set +a && docker compose up -d postgres 2>/dev/null || true
 	@sleep 2
-	@LLM_BACKEND=$(llm) docker compose --profile local exec backend uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
+	@uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
 else ifeq ($(db),remote)
 	@DB_TARGET=$(db) uv run python -c "from scripts.inspect_db import list_tables; print(list_tables())"
 endif
@@ -159,7 +157,7 @@ test-db-remote:
 # ============================================================================
 
 test: check-llm
-	@uv run pytest --llm=$(llm)
+	@uv run pytest -s --llm=$(llm)
 
 # ============================================================================
 # UTILITIES
@@ -169,20 +167,38 @@ health:
 	@curl -sf http://localhost:8001/health && echo "✅ Backend healthy" || echo "❌ Backend not responding"
 
 admin-create: check-db
-ifndef user
-	$(error user= is required. Usage: make admin-create db=... user=<username>)
+ifndef email
+	$(error email= is required. Usage: make admin-create db=... email=... password=...)
+endif
+ifndef password
+	$(error password= is required. Usage: make admin-create db=... email=... password=...)
 endif
 ifeq ($(db),local)
 	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
 	@sleep 2
-	@uv run python -m scripts.create_admin --db=local $(user)
-else ifeq ($(db),remote)
-	@uv run python -m scripts.create_admin --db=remote $(user)
 endif
+	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --password=$(password)
+
+admin-list: check-db
+ifeq ($(db),local)
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+endif
+	@uv run python -m scripts.create_admin --db=$(db) --list
+
+admin-deactivate: check-db
+ifndef email
+	$(error email= is required. Usage: make admin-deactivate db=... email=...)
+endif
+ifeq ($(db),local)
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+endif
+	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --deactivate
 
 clean:
 	@find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleaned"
 
-.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create clean check-db check-llm
+.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-deactivate clean check-db check-llm
