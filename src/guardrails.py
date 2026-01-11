@@ -46,7 +46,7 @@ class GuardrailConfig(BaseModel):
     updated_at: datetime
     created_by: Optional[str] = None
     is_active: bool
-    tenant_id: int = 0
+    tenant_id: Optional[int] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -55,9 +55,15 @@ class GuardrailConfig(BaseModel):
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-def _tid(tenant_id: Optional[int]) -> int:
-    """Convert None tenant_id to 0 for SQL operations."""
-    return tenant_id if tenant_id is not None else 0
+def _tenant_clause(tenant_id: Optional[int]) -> tuple[str, list]:
+    """
+    Return SQL clause and params for tenant filtering.
+    NULL tenant_id = system/test data, use IS NULL check.
+    """
+    if tenant_id is None:
+        return "tenant_id IS NULL", []
+    else:
+        return "tenant_id = %s", [tenant_id]
 
 
 GUARDRAIL_COLUMNS = "id, name, description, rules, created_at, updated_at, created_by, is_active, tenant_id"
@@ -74,7 +80,7 @@ def _row_to_config(row) -> GuardrailConfig:
         updated_at=row[5],
         created_by=row[6],
         is_active=row[7],
-        tenant_id=row[8] if row[8] is not None else 0
+        tenant_id=row[8]
     )
 
 
@@ -108,7 +114,7 @@ def create_config(
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (_tid(tenant_id), name, description, json.dumps(rules), created_by)
+                (tenant_id, name, description, json.dumps(rules), created_by)
             )
             config_id = cur.fetchone()[0]
         conn.commit()
@@ -127,24 +133,25 @@ def get_config(name: str, tenant_id: Optional[int] = None) -> GuardrailConfig:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             # First try tenant-specific config
             cur.execute(
                 f"""
                 SELECT {GUARDRAIL_COLUMNS}
                 FROM guardrail_configs
-                WHERE name = %s AND tenant_id = %s AND is_active = true
+                WHERE name = %s AND {tenant_clause} AND is_active = true
                 """,
-                (name, _tid(tenant_id))
+                [name] + tenant_params
             )
             row = cur.fetchone()
             
-            # Fall back to system config (tenant_id = 0)
-            if not row and _tid(tenant_id) != 0:
+            # Fall back to system config (tenant_id IS NULL)
+            if not row and tenant_id is not None:
                 cur.execute(
                     f"""
                     SELECT {GUARDRAIL_COLUMNS}
                     FROM guardrail_configs
-                    WHERE name = %s AND tenant_id = 0 AND is_active = true
+                    WHERE name = %s AND tenant_id IS NULL AND is_active = true
                     """,
                     (name,)
                 )
@@ -163,13 +170,14 @@ def get_config_by_id(config_id: int, tenant_id: Optional[int] = None) -> Guardra
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
                 f"""
                 SELECT {GUARDRAIL_COLUMNS}
                 FROM guardrail_configs
-                WHERE id = %s AND (tenant_id = %s OR tenant_id = 0)
+                WHERE id = %s AND ({tenant_clause} OR tenant_id IS NULL)
                 """,
-                (config_id, _tid(tenant_id))
+                [config_id] + tenant_params
             )
             row = cur.fetchone()
             
@@ -186,25 +194,26 @@ def list_configs(include_inactive: bool = False, tenant_id: Optional[int] = None
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             if include_inactive:
                 cur.execute(
                     f"""
                     SELECT {GUARDRAIL_COLUMNS}
                     FROM guardrail_configs
-                    WHERE tenant_id = %s OR tenant_id = 0
+                    WHERE {tenant_clause} OR tenant_id IS NULL
                     ORDER BY name
                     """,
-                    (_tid(tenant_id),)
+                    tenant_params
                 )
             else:
                 cur.execute(
                     f"""
                     SELECT {GUARDRAIL_COLUMNS}
                     FROM guardrail_configs
-                    WHERE (tenant_id = %s OR tenant_id = 0) AND is_active = true
+                    WHERE ({tenant_clause} OR tenant_id IS NULL) AND is_active = true
                     ORDER BY name
                     """,
-                    (_tid(tenant_id),)
+                    tenant_params
                 )
             
             return [_row_to_config(row) for row in cur.fetchall()]
@@ -249,12 +258,15 @@ def update_config(
         return
     
     updates.append("updated_at = NOW()")
-    params.extend([config_id, _tid(tenant_id)])
+    
+    tenant_clause, tenant_params = _tenant_clause(tenant_id)
+    params.append(config_id)
+    params.extend(tenant_params)
     
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            query = f"UPDATE guardrail_configs SET {', '.join(updates)} WHERE id = %s AND tenant_id = %s"
+            query = f"UPDATE guardrail_configs SET {', '.join(updates)} WHERE id = %s AND {tenant_clause}"
             cur.execute(query, params)
             
             if cur.rowcount == 0:
@@ -276,15 +288,16 @@ def delete_config(config_id: int, soft: bool = True, tenant_id: Optional[int] = 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             if soft:
                 cur.execute(
-                    "UPDATE guardrail_configs SET is_active = false, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
-                    (config_id, _tid(tenant_id))
+                    f"UPDATE guardrail_configs SET is_active = false, updated_at = NOW() WHERE id = %s AND {tenant_clause}",
+                    [config_id] + tenant_params
                 )
             else:
                 cur.execute(
-                    "DELETE FROM guardrail_configs WHERE id = %s AND tenant_id = %s",
-                    (config_id, _tid(tenant_id))
+                    f"DELETE FROM guardrail_configs WHERE id = %s AND {tenant_clause}",
+                    [config_id] + tenant_params
                 )
             
             if cur.rowcount == 0:

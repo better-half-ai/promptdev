@@ -52,7 +52,7 @@ class Template(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_active: bool = True
-    tenant_id: int = 0
+    tenant_id: Optional[int] = None
     is_shareable: bool = False
     cloned_from_id: Optional[int] = None
     cloned_from_tenant: Optional[int] = None
@@ -78,9 +78,15 @@ class TemplateVersion(BaseModel):
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _tid(tenant_id: Optional[int]) -> int:
-    """Convert None tenant_id to 0 for SQL operations."""
-    return tenant_id if tenant_id is not None else 0
+def _tenant_clause(tenant_id: Optional[int]) -> tuple[str, list]:
+    """
+    Return SQL clause and params for tenant filtering.
+    NULL tenant_id = system/test data, use IS NULL check.
+    """
+    if tenant_id is None:
+        return "tenant_id IS NULL", []
+    else:
+        return "tenant_id = %s", [tenant_id]
 
 
 TEMPLATE_COLUMNS = """
@@ -99,7 +105,7 @@ def _row_to_template(row) -> Template:
         created_at=row[4],
         updated_at=row[5],
         is_active=row[6],
-        tenant_id=row[7] if row[7] is not None else 0,
+        tenant_id=row[7],
         is_shareable=row[8] if row[8] is not None else False,
         cloned_from_id=row[9],
         cloned_from_tenant=row[10]
@@ -141,7 +147,7 @@ def create_template(
                 VALUES (%s, %s, %s, 1)
                 RETURNING id
                 """,
-                (_tid(tenant_id), name, content)
+                (tenant_id, name, content)
             )
             template_id = cur.fetchone()[0]
             
@@ -151,7 +157,7 @@ def create_template(
                 (tenant_id, template_id, version, content, created_by, change_description)
                 VALUES (%s, %s, 1, %s, %s, %s)
                 """,
-                (_tid(tenant_id), template_id, content, created_by, change_description)
+                (tenant_id, template_id, content, created_by, change_description)
             )
             
             conn.commit()
@@ -171,9 +177,10 @@ def get_template(template_id: int, tenant_id: Optional[int] = None) -> Template:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             row = cur.fetchone()
             if not row:
@@ -188,9 +195,10 @@ def get_template_by_name(name: str, tenant_id: Optional[int] = None) -> Template
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE name = %s AND tenant_id = %s",
-                (name, _tid(tenant_id))
+                f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE name = %s AND {tenant_clause}",
+                [name] + tenant_params
             )
             row = cur.fetchone()
             if not row:
@@ -205,15 +213,16 @@ def list_templates(include_inactive: bool = False, tenant_id: Optional[int] = No
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             if include_inactive:
                 cur.execute(
-                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE tenant_id = %s ORDER BY name",
-                    (_tid(tenant_id),)
+                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE {tenant_clause} ORDER BY name",
+                    tenant_params
                 )
             else:
                 cur.execute(
-                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE tenant_id = %s AND is_active = true ORDER BY name",
-                    (_tid(tenant_id),)
+                    f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE {tenant_clause} AND is_active = true ORDER BY name",
+                    tenant_params
                 )
             return [_row_to_template(row) for row in cur.fetchall()]
     finally:
@@ -233,9 +242,10 @@ def update_template(
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "SELECT current_version FROM system_prompt WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"SELECT current_version FROM system_prompt WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             row = cur.fetchone()
             if not row:
@@ -244,12 +254,12 @@ def update_template(
             new_version = row[0] + 1
             
             cur.execute(
-                """
+                f"""
                 UPDATE system_prompt 
                 SET content = %s, current_version = %s, updated_at = NOW()
-                WHERE id = %s AND tenant_id = %s
+                WHERE id = %s AND {tenant_clause}
                 """,
-                (content, new_version, template_id, _tid(tenant_id))
+                [content, new_version, template_id] + tenant_params
             )
             
             cur.execute(
@@ -258,7 +268,7 @@ def update_template(
                 (tenant_id, template_id, version, content, created_by, change_description)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (_tid(tenant_id), template_id, new_version, content, created_by, change_description)
+                (tenant_id, template_id, new_version, content, created_by, change_description)
             )
             
             conn.commit()
@@ -274,13 +284,14 @@ def update_template(
 
 
 def deactivate_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
-    """Deactivate a template (soft delete)."""
+    """Soft delete a template by setting is_active = false."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "UPDATE system_prompt SET is_active = false, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"UPDATE system_prompt SET is_active = false, updated_at = NOW() WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             if cur.rowcount == 0:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
@@ -291,13 +302,14 @@ def deactivate_template(template_id: int, tenant_id: Optional[int] = None) -> bo
 
 
 def activate_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
-    """Reactivate a deactivated template."""
+    """Re-activate a deactivated template."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "UPDATE system_prompt SET is_active = true, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"UPDATE system_prompt SET is_active = true, updated_at = NOW() WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             if cur.rowcount == 0:
                 raise TemplateNotFoundError(f"Template {template_id} not found")
@@ -312,9 +324,10 @@ def delete_template(template_id: int, tenant_id: Optional[int] = None) -> bool:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "DELETE FROM system_prompt WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"DELETE FROM system_prompt WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             conn.commit()
             return cur.rowcount > 0
@@ -331,9 +344,10 @@ def get_version_history(template_id: int, tenant_id: Optional[int] = None) -> li
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "SELECT id FROM system_prompt WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"SELECT id FROM system_prompt WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             if not cur.fetchone():
                 raise TemplateNotFoundError(f"Template {template_id} not found")
@@ -364,9 +378,10 @@ def get_version(template_id: int, version: int, tenant_id: Optional[int] = None)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "SELECT id FROM system_prompt WHERE id = %s AND tenant_id = %s",
-                (template_id, _tid(tenant_id))
+                f"SELECT id FROM system_prompt WHERE id = %s AND {tenant_clause}",
+                [template_id] + tenant_params
             )
             if not cur.fetchone():
                 raise TemplateNotFoundError(f"Template {template_id} not found")
@@ -459,9 +474,10 @@ def set_template_shareable(template_id: int, is_shareable: bool, tenant_id: Opti
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
             cur.execute(
-                "UPDATE system_prompt SET is_shareable = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
-                (is_shareable, template_id, _tid(tenant_id))
+                f"UPDATE system_prompt SET is_shareable = %s, updated_at = NOW() WHERE id = %s AND {tenant_clause}",
+                [is_shareable, template_id] + tenant_params
             )
             conn.commit()
             return cur.rowcount > 0
@@ -509,7 +525,7 @@ def clone_template(source_template_id: int, tenant_id: int, new_name: Optional[s
                 VALUES (%s, %s, %s, 1, %s, %s)
                 RETURNING id
                 """,
-                (_tid(tenant_id), clone_name, source.content, source_template_id, source.tenant_id)
+                (tenant_id, clone_name, source.content, source_template_id, source.tenant_id)
             )
             new_id = cur.fetchone()[0]
             
@@ -519,7 +535,7 @@ def clone_template(source_template_id: int, tenant_id: int, new_name: Optional[s
                 (tenant_id, template_id, version, content, created_by, change_description)
                 VALUES (%s, %s, 1, %s, %s, %s)
                 """,
-                (_tid(tenant_id), new_id, source.content, "system", f"Cloned from template {source_template_id}")
+                (tenant_id, new_id, source.content, "system", f"Cloned from template {source_template_id}")
             )
             
             conn.commit()
