@@ -8,7 +8,7 @@ import psycopg2
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.config import get_config, get_active_db_config
+from src.config import get_config
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
@@ -31,34 +31,38 @@ def get_migration_conn():
         )
     elif use_test:
         # Use test database from config (for manual test DB)
-        db_cfg = get_active_db_config()
         test_cfg = getattr(cfg, 'test_database', None)
         if test_cfg:
             return psycopg2.connect(
-                host=getattr(test_cfg, 'host', db_cfg.host),
-                port=getattr(test_cfg, 'port', db_cfg.port),
+                host=getattr(test_cfg, 'host', cfg.database.host),
+                port=getattr(test_cfg, 'port', cfg.database.port),
                 user=test_cfg.user,
-                password=db_cfg.password,
+                password=cfg.database.password,
                 database=test_cfg.database,
             )
         else:
-            # Fallback to active config with test DB name
+            # Fallback to production config with test DB name
             return psycopg2.connect(
-                host=db_cfg.host,
-                port=db_cfg.port,
-                user=db_cfg.user,
-                password=db_cfg.password,
+                host=cfg.database.host,
+                port=cfg.database.port,
+                user=cfg.database.user,
+                password=cfg.database.password,
                 database="promptdev_test",
             )
     else:
-        # Use active database configuration (local or remote based on DB_TARGET)
-        db_cfg = get_active_db_config()
+        # Use production database configuration
+        # Allow host override via env var (for running locally vs in Docker)
+        host = os.environ.get("DB_HOST", cfg.database.host)
+        # "postgres" is Docker hostname - use localhost when running locally
+        if host == "postgres":
+            host = "localhost"
+        
         return psycopg2.connect(
-            host=db_cfg.host,
-            port=db_cfg.port,
-            user=db_cfg.user,
-            password=db_cfg.password,
-            database=db_cfg.database,
+            host=host,
+            port=cfg.database.port,
+            user=cfg.database.user,
+            password=cfg.database.password,
+            database=cfg.database.database,
         )
 
 
