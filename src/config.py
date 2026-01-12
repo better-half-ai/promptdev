@@ -31,8 +31,8 @@ class TestMistralConfig(BaseModel):
 
 
 class VeniceConfig(BaseModel):
-    url: str = "https://api.venice.ai/api/v1"
-    model: str = "mistral-31-24b"
+    url: str
+    model: str
 
 
 class DatabaseConfig(BaseModel):
@@ -44,15 +44,6 @@ class DatabaseConfig(BaseModel):
     max_connections: int = 10
 
 
-class RemoteDatabaseConfig(BaseModel):
-    host: str = "aws-1-us-east-2.pooler.supabase.com"
-    port: int = 5432
-    user: str = "postgres.hykoamfsyttvteipvsbw"
-    password: Optional[str] = None
-    database: str = "postgres"
-    max_connections: int = 10
-
-
 class SecurityConfig(BaseModel):
     paseto_public_key: Optional[str] = None
 
@@ -61,9 +52,9 @@ class Config(BaseModel):
     mode: str
     mistral: MistralConfig
     database: DatabaseConfig
-    remote_database: RemoteDatabaseConfig = RemoteDatabaseConfig()
+    remote_database: DatabaseConfig
     test_mistral: Optional[TestMistralConfig] = None
-    venice: VeniceConfig = VeniceConfig()
+    venice: VeniceConfig
     security: SecurityConfig = SecurityConfig()
 
 

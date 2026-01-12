@@ -163,11 +163,12 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
+                    credentials: 'same-origin',
                     body: JSON.stringify({ email, password }),
                 });
                 
                 if (response.ok) {
-                    window.location.href = '/dashboard';
+                    window.location.href = '/';
                 } else {
                     const data = await response.json();
                     errorDiv.textContent = data.detail || 'Invalid credentials';

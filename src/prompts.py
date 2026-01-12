@@ -209,11 +209,24 @@ def get_template_by_name(name: str, tenant_id: Optional[int] = None) -> Template
 
 
 def list_templates(include_inactive: bool = False, tenant_id: Optional[int] = None) -> list[Template]:
-    """List templates for a tenant."""
+    """List templates for a tenant. Auto-clones default template if tenant has none."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            
+            # Check if tenant has any templates
+            cur.execute(
+                f"SELECT COUNT(*) FROM system_prompt WHERE {tenant_clause}",
+                tenant_params
+            )
+            count = cur.fetchone()[0]
+            
+            # If no templates and tenant_id is set, clone the default system template
+            if count == 0 and tenant_id is not None:
+                _clone_default_template_for_tenant(cur, tenant_id)
+                conn.commit()
+            
             if include_inactive:
                 cur.execute(
                     f"SELECT {TEMPLATE_COLUMNS} FROM system_prompt WHERE {tenant_clause} ORDER BY name",
@@ -227,6 +240,45 @@ def list_templates(include_inactive: bool = False, tenant_id: Optional[int] = No
             return [_row_to_template(row) for row in cur.fetchall()]
     finally:
         put_conn(conn)
+
+
+def _clone_default_template_for_tenant(cur, tenant_id: int) -> Optional[int]:
+    """Clone the default system template to a tenant. Returns new template ID or None."""
+    # Find the default system template (tenant_id IS NULL, name = 'default')
+    cur.execute(
+        "SELECT id, content FROM system_prompt WHERE tenant_id IS NULL AND name = 'default' LIMIT 1"
+    )
+    row = cur.fetchone()
+    if not row:
+        logger.warning("No default system template found to clone")
+        return None
+    
+    source_id, content = row
+    
+    # Clone it for this tenant
+    cur.execute(
+        """
+        INSERT INTO system_prompt 
+        (tenant_id, name, content, current_version, cloned_from_id)
+        VALUES (%s, 'default', %s, 1, %s)
+        RETURNING id
+        """,
+        (tenant_id, content, source_id)
+    )
+    new_id = cur.fetchone()[0]
+    
+    # Add version history
+    cur.execute(
+        """
+        INSERT INTO prompt_version_history 
+        (tenant_id, template_id, version, content, created_by, change_description)
+        VALUES (%s, %s, 1, %s, 'system', 'Auto-cloned from default template')
+        """,
+        (tenant_id, new_id, content)
+    )
+    
+    logger.info(f"Auto-cloned default template for tenant {tenant_id}, new template id={new_id}")
+    return new_id
 
 
 def update_template(

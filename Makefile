@@ -58,6 +58,7 @@ help:
 	@echo "  make admin-create db=...                     Create admin (interactive)"
 	@echo "  make admin-list db=...                       List all admins"
 	@echo "  make admin-reset-password db=... email=...   Reset admin password"
+	@echo "  make admin-activate db=... email=...         Activate admin"
 	@echo "  make admin-deactivate db=... email=...       Deactivate admin"
 	@echo ""
 	@echo "🔧 UTILITIES"
@@ -191,6 +192,16 @@ ifeq ($(db),local)
 endif
 	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --reset-password
 
+admin-activate: check-db
+ifndef email
+	$(error email= is required. Usage: make admin-activate db=... email=...)
+endif
+ifeq ($(db),local)
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+endif
+	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --activate
+
 admin-deactivate: check-db
 ifndef email
 	$(error email= is required. Usage: make admin-deactivate db=... email=...)
@@ -206,4 +217,4 @@ clean:
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleaned"
 
-.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-reset-password admin-deactivate clean check-db check-llm
+.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-reset-password admin-activate admin-deactivate clean check-db check-llm

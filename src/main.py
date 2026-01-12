@@ -92,22 +92,12 @@ app.add_middleware(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/")
-async def root():
-    return RedirectResponse(url="/dashboard")
-
-
-@app.get("/dashboard")
-async def dashboard(request: Request):
+async def root(request: Request):
     """Serve dashboard if authenticated, otherwise login page."""
     session = request.cookies.get(SESSION_COOKIE_NAME)
     if not session or not verify_session_token(session):
         return FileResponse("static/login.html")
     return FileResponse("static/dashboard.html")
-
-
-@app.get("/login")
-async def login_page():
-    return FileResponse("static/login.html")
 
 
 @app.get("/health")
@@ -143,6 +133,7 @@ async def admin_login(request: LoginRequest, response: Response, req: Request):
         secure=False,
         samesite="lax",
         max_age=SESSION_MAX_AGE,
+        path="/",
     )
     
     audit_log_from_request(admin, req, "login")
@@ -154,7 +145,7 @@ async def admin_login(request: LoginRequest, response: Response, req: Request):
 async def admin_logout(response: Response, req: Request, admin: Admin = Depends(get_current_admin)):
     """Clear session cookie."""
     audit_log_from_request(admin, req, "logout")
-    response.delete_cookie(key=SESSION_COOKIE_NAME)
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"status": "ok"}
 
 
