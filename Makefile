@@ -55,9 +55,10 @@ help:
 	@echo "  make test llm=...    Run tests with specified LLM"
 	@echo ""
 	@echo "👤 ADMIN MANAGEMENT"
-	@echo "  make admin-create db=... email=... password=...  Create admin"
-	@echo "  make admin-list db=...                           List all admins"
-	@echo "  make admin-deactivate db=... email=...           Deactivate admin"
+	@echo "  make admin-create db=...                     Create admin (interactive)"
+	@echo "  make admin-list db=...                       List all admins"
+	@echo "  make admin-reset-password db=... email=...   Reset admin password"
+	@echo "  make admin-deactivate db=... email=...       Deactivate admin"
 	@echo ""
 	@echo "🔧 UTILITIES"
 	@echo "  make health                       Check backend health"
@@ -167,17 +168,11 @@ health:
 	@curl -sf http://localhost:8001/health && echo "✅ Backend healthy" || echo "❌ Backend not responding"
 
 admin-create: check-db
-ifndef email
-	$(error email= is required. Usage: make admin-create db=... email=... password=...)
-endif
-ifndef password
-	$(error password= is required. Usage: make admin-create db=... email=... password=...)
-endif
 ifeq ($(db),local)
 	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
 	@sleep 2
 endif
-	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --password=$(password)
+	@uv run python -m scripts.create_admin --db=$(db)
 
 admin-list: check-db
 ifeq ($(db),local)
@@ -185,6 +180,16 @@ ifeq ($(db),local)
 	@sleep 2
 endif
 	@uv run python -m scripts.create_admin --db=$(db) --list
+
+admin-reset-password: check-db
+ifndef email
+	$(error email= is required. Usage: make admin-reset-password db=... email=...)
+endif
+ifeq ($(db),local)
+	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
+	@sleep 2
+endif
+	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --reset-password
 
 admin-deactivate: check-db
 ifndef email
@@ -201,4 +206,4 @@ clean:
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleaned"
 
-.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-deactivate clean check-db check-llm
+.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-reset-password admin-deactivate clean check-db check-llm
