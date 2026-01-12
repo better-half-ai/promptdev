@@ -1,0 +1,9 @@
+---
+- name: Deploy PromptDev Application
+  hosts: promptdev_vm
+  become: yes
+  
+  roles:
+    - promptdev
+    - caddy
+    - firewall

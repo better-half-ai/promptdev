@@ -1,0 +1,38 @@
+---
+- name: Smoke Tests
+  hosts: promptdev_vm
+  gather_facts: no
+
+  tasks:
+    - name: Check app health endpoint
+      uri:
+        url: "https://{{ domain }}/health"
+        validate_certs: yes
+        status_code: 200
+      retries: 5
+      delay: 10
+
+    - name: Check login page
+      uri:
+        url: "https://{{ domain }}/login"
+        validate_certs: yes
+        status_code: 200
+
+    - name: Check services running
+      become: yes
+      systemd:
+        name: "{{ item }}"
+      register: svc
+      loop: [promptdev, caddy]
+
+    - name: Assert services active
+      assert:
+        that: item.status.ActiveState == "active"
+      loop: "{{ svc.results }}"
+
+    - name: Check app port
+      become: yes
+      wait_for:
+        port: 8000
+        host: 127.0.0.1
+        timeout: 5

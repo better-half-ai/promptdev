@@ -1,0 +1,142 @@
+---
+- name: Create promptdev user
+  user:
+    name: "{{ app_user }}"
+    system: yes
+    shell: /bin/false
+    create_home: no
+
+- name: Install system dependencies
+  apt:
+    name:
+      - python3.12
+      - python3.12-venv
+      - rsync
+    state: present
+    update_cache: yes
+
+- name: Create application directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  loop:
+    - "{{ app_dir }}"
+    - "{{ app_dir }}/src"
+    - "{{ app_dir }}/static"
+    - "{{ app_dir }}/migrations"
+    - "{{ app_dir }}/sentiment-analysis"
+    - "{{ config_dir }}"
+    - "{{ data_dir }}"
+    - "{{ data_dir }}/models"
+    - "{{ log_dir }}"
+
+- name: Copy src
+  synchronize:
+    src: "{{ playbook_dir }}/../src/"
+    dest: "{{ app_dir }}/src/"
+    rsync_opts:
+      - "--exclude=__pycache__/"
+  notify: restart promptdev
+
+- name: Copy db
+  synchronize:
+    src: "{{ playbook_dir }}/../db/"
+    dest: "{{ app_dir }}/db/"
+    rsync_opts:
+      - "--exclude=__pycache__/"
+  notify: restart promptdev
+
+- name: Copy static files
+  synchronize:
+    src: "{{ playbook_dir }}/../static/"
+    dest: "{{ app_dir }}/static/"
+
+- name: Copy migrations
+  synchronize:
+    src: "{{ playbook_dir }}/../migrations/"
+    dest: "{{ app_dir }}/migrations/"
+
+- name: Copy sentiment-analysis
+  synchronize:
+    src: "{{ playbook_dir }}/../sentiment-analysis/"
+    dest: "{{ app_dir }}/sentiment-analysis/"
+    rsync_opts:
+      - "--exclude=models/"
+      - "--exclude=.venv/"
+      - "--exclude=__pycache__/"
+  notify: restart promptdev
+
+- name: Copy .env
+  copy:
+    src: "{{ playbook_dir }}/../.env"
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0600'
+  notify: restart promptdev
+
+- name: Copy config.toml
+  copy:
+    src: "{{ playbook_dir }}/../config.toml"
+    dest: "{{ app_dir }}/config.toml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0600'
+  notify: restart promptdev
+
+- name: Install uv
+  shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    creates: /root/.local/bin/uv
+
+- name: Create venv and install deps
+  shell: |
+    export PATH="/root/.local/bin:$PATH"
+    cd {{ app_dir }}
+    uv venv .venv --python python3.12 || true
+    uv pip install --python .venv/bin/python \
+      fastapi 'uvicorn[standard]' httpx psycopg2-binary \
+      prometheus-client python-dotenv pydantic jinja2 \
+      bcrypt itsdangerous \
+      transformers torch onnxruntime numpy tomli
+
+- name: Download sentiment models
+  shell: |
+    {{ app_dir }}/.venv/bin/python -c "
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    AutoTokenizer.from_pretrained('cardiffnlp/twitter-roberta-base-sentiment-latest', cache_dir='{{ data_dir }}/models')
+    AutoModelForSequenceClassification.from_pretrained('cardiffnlp/twitter-roberta-base-sentiment-latest', cache_dir='{{ data_dir }}/models')
+    "
+  args:
+    creates: "{{ data_dir }}/models/models--cardiffnlp--twitter-roberta-base-sentiment-latest"
+
+- name: Fix ownership
+  file:
+    path: "{{ item }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    recurse: yes
+  loop:
+    - "{{ app_dir }}"
+    - "{{ config_dir }}"
+    - "{{ data_dir }}"
+
+- name: Deploy systemd service
+  template:
+    src: promptdev.service.j2
+    dest: /etc/systemd/system/promptdev.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart promptdev
+
+- name: Ensure promptdev is running
+  systemd:
+    name: promptdev
+    state: started
+    enabled: yes

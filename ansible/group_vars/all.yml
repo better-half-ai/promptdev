@@ -1,0 +1,14 @@
+# Domain configuration
+domain: alpha.better-half.ai
+
+# Application configuration
+app_name: promptdev
+app_user: promptdev
+app_dir: /opt/promptdev
+config_dir: /etc/promptdev
+data_dir: /var/promptdev
+log_dir: /var/log/promptdev
+
+# Application settings
+app_host: 127.0.0.1
+app_port: 8000

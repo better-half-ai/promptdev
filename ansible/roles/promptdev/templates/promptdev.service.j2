@@ -1,0 +1,19 @@
+[Unit]
+Description=PromptDev Application
+After=network.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+EnvironmentFile={{ app_dir }}/.env
+Environment="DB_TARGET=remote"
+ExecStart={{ app_dir }}/.venv/bin/uvicorn src.main:app --host {{ app_host }} --port {{ app_port }}
+Restart=always
+RestartSec=5
+StandardOutput=append:{{ log_dir }}/app.log
+StandardError=append:{{ log_dir }}/error.log
+
+[Install]
+WantedBy=multi-user.target
