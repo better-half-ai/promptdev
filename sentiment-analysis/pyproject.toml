@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.120.4",
     "numpy==1.26.3",
-    "onnxruntime-silicon>=1.16.3",
+    "onnxruntime>=1.16.0",
     "openvino==2024.5.0",
     "pytest>=8.4.2",
     "requests>=2.32.5",
@@ -15,9 +15,7 @@ dependencies = [
     "transformers>=4.57.1",
     "uvicorn>=0.38.0",
 ]
-
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
-
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cpu"
