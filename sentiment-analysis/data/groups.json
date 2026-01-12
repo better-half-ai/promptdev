@@ -1,0 +1,5 @@
+{
+  "positive": ["joy", "love", "trust", "optimism"],
+  "negative": ["anger", "disgust", "fear", "sadness", "pessimism"],
+  "surprise": ["surprise", "anticipation"]
+}

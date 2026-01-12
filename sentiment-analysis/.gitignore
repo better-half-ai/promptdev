@@ -1,0 +1,53 @@
+# OS / IDE
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# uv / virtual environments
+.venv/
+uv.lock
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Model data and checkpoints
+models/
+!models/.keep
+
+# Temporary or generated data
+data/tmp/
+data/*.tmp
+data/*.bak
+
+# Notebooks and scratch
+*.ipynb_checkpoints/
+*.ipynb
+notebooks/
+scratch/
+
+# Local runtime files
+.env
+.env.*
+*.pid
+*.sock
+
+# macOS metadata
+._*
+
