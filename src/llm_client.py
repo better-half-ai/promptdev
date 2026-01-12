@@ -108,10 +108,10 @@ def get_client_config(backend: Optional[str] = None) -> ClientConfig:
     if backend == "venice":
         api_key = os.environ.get("VENICE_API_KEY", "")
         return ClientConfig(
-            base_url=os.environ.get("VENICE_API_URL", "https://api.venice.ai/api/v1"),
+            base_url=cfg.venice.url,
             backend=LLMBackend.VENICE,
             api_key=api_key,
-            model=os.environ.get("VENICE_MODEL", "mistral-31-24b"),
+            model=cfg.venice.model,
             timeout_seconds=60.0,
             max_retries=3,
             retry_delay=1.0

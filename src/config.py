@@ -30,12 +30,26 @@ class TestMistralConfig(BaseModel):
     url: str
 
 
+class VeniceConfig(BaseModel):
+    url: str = "https://api.venice.ai/api/v1"
+    model: str = "mistral-31-24b"
+
+
 class DatabaseConfig(BaseModel):
     host: str
     port: int
     user: str
     password: Optional[str] = None
     database: str
+    max_connections: int = 10
+
+
+class RemoteDatabaseConfig(BaseModel):
+    host: str = "aws-1-us-east-2.pooler.supabase.com"
+    port: int = 5432
+    user: str = "postgres.hykoamfsyttvteipvsbw"
+    password: Optional[str] = None
+    database: str = "postgres"
     max_connections: int = 10
 
 
@@ -47,7 +61,9 @@ class Config(BaseModel):
     mode: str
     mistral: MistralConfig
     database: DatabaseConfig
+    remote_database: RemoteDatabaseConfig = RemoteDatabaseConfig()
     test_mistral: Optional[TestMistralConfig] = None
+    venice: VeniceConfig = VeniceConfig()
     security: SecurityConfig = SecurityConfig()
 
 
@@ -61,11 +77,34 @@ def _load_config_from(path: Path) -> Config:
 
     cfg = Config(**data)
 
-    # Load secrets from environment (optional for tests)
+    # Load secrets from environment
     load_dotenv(PROJECT_ROOT / ".env")
+    
+    # Local DB password
     pwd = os.environ.get("PROMPTDEV_USER_PASS")
     if pwd:
         cfg.database.password = pwd
+    
+    # Remote DB password
+    supabase_pwd = os.environ.get("SUPABASE_PASSWORD")
+    if supabase_pwd:
+        cfg.remote_database.password = supabase_pwd
+    
+    # Handle DB_TARGET for CLI tools running outside Docker
+    db_target = os.environ.get("DB_TARGET")
+    if db_target == "local":
+        # CLI running on host - use localhost instead of docker hostname
+        cfg.database.host = "localhost"
+    elif db_target == "remote":
+        # Use remote database config
+        cfg.database = DatabaseConfig(
+            host=cfg.remote_database.host,
+            port=cfg.remote_database.port,
+            user=cfg.remote_database.user,
+            password=cfg.remote_database.password,
+            database=cfg.remote_database.database,
+            max_connections=cfg.remote_database.max_connections,
+        )
 
     return cfg
 

@@ -61,6 +61,7 @@ from src.auth import (
     super_admin_required,
     authenticate,
     create_session_token,
+    verify_session_token,
     create_admin,
     list_admins,
     update_admin,
@@ -96,7 +97,11 @@ async def root():
 
 
 @app.get("/dashboard")
-async def dashboard():
+async def dashboard(request: Request):
+    """Serve dashboard if authenticated, otherwise login page."""
+    session = request.cookies.get(SESSION_COOKIE_NAME)
+    if not session or not verify_session_token(session):
+        return FileResponse("static/login.html")
     return FileResponse("static/dashboard.html")
 
 

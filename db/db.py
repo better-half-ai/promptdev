@@ -17,7 +17,7 @@ def init_pool():
             host=cfg.database.host,
             port=cfg.database.port,
             user=cfg.database.user,
-            password=cfg.database.password,   # now correctly populated
+            password=cfg.database.password,
             database=cfg.database.database,
         )
     return _pool
@@ -31,3 +31,10 @@ def get_conn():
 def put_conn(conn):
     if _pool:
         _pool.putconn(conn)
+
+
+def close_pool():
+    global _pool
+    if _pool:
+        _pool.closeall()
+        _pool = None

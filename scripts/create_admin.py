@@ -3,11 +3,14 @@
 Admin management CLI for PromptDev.
 
 Usage:
-    # Create admin
-    python -m scripts.create_admin --db=remote --email=admin@example.com --password=secret123
+    # Create admin (interactive prompts)
+    python -m scripts.create_admin --db=remote
     
     # List admins
     python -m scripts.create_admin --db=remote --list
+    
+    # Reset password
+    python -m scripts.create_admin --db=remote --email=admin@example.com --reset-password
     
     # Deactivate admin
     python -m scripts.create_admin --db=remote --email=admin@example.com --deactivate
@@ -22,6 +25,7 @@ Usage:
 import os
 import sys
 import argparse
+import getpass
 from pathlib import Path
 
 # Add project root to path
@@ -34,8 +38,8 @@ def main():
     parser.add_argument("--db", required=True, choices=["local", "remote"],
                         help="Database to use")
     parser.add_argument("--email", help="Admin email")
-    parser.add_argument("--password", help="Admin password (min 8 chars)")
     parser.add_argument("--list", action="store_true", help="List all admins")
+    parser.add_argument("--reset-password", action="store_true", help="Reset admin password")
     parser.add_argument("--deactivate", action="store_true", help="Deactivate admin")
     parser.add_argument("--activate", action="store_true", help="Activate admin")
     parser.add_argument("--delete", action="store_true", help="Delete admin")
@@ -65,10 +69,35 @@ def main():
                     print(f"{a['id']:<6} {a['email']:<40} {str(a['is_active']):<8} {created:<24} {login:<24}")
             return
         
-        # Require email for other operations
-        if not args.email:
-            print("Error: --email required")
-            sys.exit(1)
+        # For operations requiring email
+        if args.deactivate or args.activate or args.delete or args.reset_password:
+            if not args.email:
+                print("Error: --email required for this operation")
+                sys.exit(1)
+        
+        # Reset password
+        if args.reset_password:
+            admin = get_admin_by_email(args.email)
+            if not admin:
+                print(f"Error: Admin '{args.email}' not found")
+                sys.exit(1)
+            
+            while True:
+                password = getpass.getpass("Enter new password (min 8 chars): ")
+                if len(password) < 8:
+                    print("Error: Password must be at least 8 characters")
+                    continue
+                
+                password_confirm = getpass.getpass("Confirm new password: ")
+                if password != password_confirm:
+                    print("Error: Passwords do not match")
+                    continue
+                
+                break
+            
+            update_admin(admin["id"], password=password)
+            print(f"✅ Password reset for '{args.email}'")
+            return
         
         # Deactivate
         if args.deactivate:
@@ -100,22 +129,35 @@ def main():
             print(f"✅ Deleted admin '{args.email}'")
             return
         
-        # Create admin (default action)
-        if not args.password:
-            print("Error: --password required for creating admin")
-            sys.exit(1)
-        
-        if len(args.password) < 8:
-            print("Error: Password must be at least 8 characters")
-            sys.exit(1)
+        # Create admin (default action) - interactive prompts
+        email = args.email
+        if not email:
+            email = input("Enter email: ").strip()
+            if not email:
+                print("Error: Email required")
+                sys.exit(1)
         
         # Check if already exists
-        if get_admin_by_email(args.email):
-            print(f"Error: Admin '{args.email}' already exists")
+        if get_admin_by_email(email):
+            print(f"Error: Admin '{email}' already exists")
             sys.exit(1)
         
-        admin_id = create_admin(args.email, args.password)
-        print(f"✅ Created admin '{args.email}' (id={admin_id}) in {args.db} database")
+        # Prompt for password securely
+        while True:
+            password = getpass.getpass("Enter password (min 8 chars): ")
+            if len(password) < 8:
+                print("Error: Password must be at least 8 characters")
+                continue
+            
+            password_confirm = getpass.getpass("Confirm password: ")
+            if password != password_confirm:
+                print("Error: Passwords do not match")
+                continue
+            
+            break
+        
+        admin_id = create_admin(email, password)
+        print(f"✅ Created admin '{email}' (id={admin_id}) in {args.db} database")
         
     except Exception as e:
         print(f"Error: {e}")
