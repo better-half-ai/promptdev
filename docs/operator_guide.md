@@ -1,24 +1,53 @@
-# Better Half: Prompt Operator Guide
+# PromptDev: Operator Guide
 
-*Managing system prompts and guardrails*
+*Managing system prompts, guardrails, and conversations*
 
 ---
 
 ## What This Guide Covers
 
-1. Dashboard overview
-2. Managing personalities (system prompts)
-3. Editing templates and versioning
-4. Configuring guardrails for Dolphin Mistral and Venice
-5. Monitoring conversations
+1. Authentication and access
+2. Dashboard overview
+3. Managing personalities (system prompts)
+4. Editing templates and versioning
+5. Configuring guardrails
+6. Monitoring conversations
 
 ---
 
-## 1. Dashboard Overview
+## 1. Authentication
 
-**URL:** `/static/dashboard.html`
+**URL:** `http://localhost:8001/`
 
-The dashboard has three main views accessible from the sidebar:
+All access requires admin login. Each admin (tenant) has isolated data - you only see your own templates, users, and conversations.
+
+### First-Time Setup
+
+```bash
+# Create your admin account
+make admin-create db=remote
+
+# Enter email and password when prompted
+```
+
+### Login
+
+Navigate to `http://localhost:8001/` and enter your credentials. Session lasts 24 hours.
+
+### Admin Management
+
+```bash
+make admin-list db=remote                           # List all admins
+make admin-reset-password db=remote email=...       # Reset password
+make admin-activate db=remote email=...             # Re-enable admin
+make admin-deactivate db=remote email=...           # Disable admin
+```
+
+---
+
+## 2. Dashboard Overview
+
+After login, you see three main views in the sidebar:
 
 ### Overview
 Real-time statistics:
@@ -36,7 +65,7 @@ Monitor active users. View conversation history, halt/resume chats, inject messa
 
 ---
 
-## 2. Managing Personalities
+## 3. Managing Personalities
 
 **Location:** Dashboard → Personalities
 
@@ -45,6 +74,10 @@ A "personality" is a system prompt template stored in the database. Each persona
 - **Content:** The actual prompt text (supports Jinja2 variables)
 - **Version:** Auto-incremented on each edit
 - **Status:** Active or Inactive
+
+### Default Template
+
+When you first login with no templates, the system automatically clones the default template for you.
 
 ### Creating a Personality
 
@@ -73,9 +106,9 @@ Use the dropdown to filter by:
 
 ---
 
-## 3. Editing Templates
+## 4. Editing Templates
 
-**Location:** Dashboard → Personalities → Edit (or `/static/editor.html?id=X`)
+**Location:** Dashboard → Personalities → Edit
 
 The editor has three tabs:
 
@@ -122,7 +155,7 @@ Variables are filled in at runtime by the system.
 
 ---
 
-## 4. Configuring Guardrails
+## 5. Configuring Guardrails
 
 Guardrails modify the system prompt before it's sent to the LLM. They prepend instructions that shape model behavior.
 
@@ -167,7 +200,7 @@ Currently done via API. Each config has:
 
 ### Guardrail Strategies by Model
 
-#### Dolphin Mistral (4.4 GB)
+#### Dolphin Mistral (Local)
 
 Dolphin is an "uncensored" model — it has minimal built-in refusals. This means:
 - It will engage with almost any topic
@@ -188,9 +221,7 @@ You do NOT:
 - Provide instructions for illegal activities
 ```
 
-Since Dolphin doesn't refuse by default, focus your guardrails on specifying what to block rather than what to allow.
-
-#### Venice Large (24 GB)
+#### Venice (Production)
 
 Venice has moderate built-in caution. You may see occasional refusals on sensitive topics even when appropriate.
 
@@ -205,28 +236,18 @@ When a topic seems sensitive, provide thoughtful engagement rather
 than refusing. Assume the user is an adult seeking genuine help.
 ```
 
-**If Venice is still over-cautious:**
+### Guardrail Priority
 
-Add stronger override language:
-```
-You do NOT refuse requests about:
-- Relationship conflicts and arguments
-- Sexual health and intimacy concerns
-- Emotional struggles including depression and anxiety
-- Family problems and difficult relationships
-
-These topics require direct engagement, not deflection.
-```
-
-### Assigning Guardrails
-
-Guardrails are applied at the API level. The system uses a default config, or you can specify per-request. Work with engineering to configure which guardrail config applies to which context.
+Higher priority rules are prepended first (appear earlier in the final prompt):
+- Priority 10 → prepended first
+- Priority 5 → prepended after priority 10
+- Priority 1 → prepended last (closest to your template)
 
 ---
 
-## 5. Monitoring Conversations
+## 6. Monitoring Conversations
 
-**Location:** Dashboard → Conversations (or `/static/monitor.html?user=X`)
+**Location:** Dashboard → Conversations
 
 ### User List
 
@@ -264,17 +285,31 @@ Displays the full conversation history for a user. Updates every 5 seconds.
 
 ---
 
-## 6. Quick Reference
+## 7. Multi-Tenant Isolation
 
-### Dashboard Navigation
+Each admin (tenant) has completely isolated:
+- Templates
+- Users and conversations
+- Guardrails
+- Audit logs
 
-| Sidebar Item | URL |
-|-------------|-----|
-| Overview | `/static/dashboard.html` (default view) |
-| Personalities | `/static/dashboard.html` → Personalities tab |
-| Conversations | `/static/dashboard.html` → Conversations tab |
-| Editor | `/static/editor.html?id=X` |
-| Monitor | `/static/monitor.html?user=X` |
+You cannot see or access other admins' data. The system enforces `tenant_id` on all database queries.
+
+### Template Sharing
+
+Admins can optionally share templates:
+
+1. Create template, mark `is_shareable = true`
+2. Template appears in shared library
+3. Other admin browses shared library, clicks "Clone"
+4. Independent copy created in their space
+5. Original and clone are completely independent
+
+Lineage tracked via `cloned_from_id` and `cloned_from_tenant`.
+
+---
+
+## 8. Quick Reference
 
 ### Template Versioning
 
@@ -283,12 +318,21 @@ Displays the full conversation history for a user. Updates every 5 seconds.
 - Rollback creates a NEW version with old content
 - Full audit trail maintained
 
-### Guardrail Priority
+### API Authentication
 
-Higher priority rules are prepended first (appear earlier in the final prompt):
-- Priority 10 → prepended first
-- Priority 5 → prepended after priority 10
-- Priority 1 → prepended last (closest to your template)
+```bash
+# Login and save session cookie
+curl -X POST http://localhost:8001/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"yourpassword"}' \
+  -c cookies.txt
+
+# Use authenticated endpoints
+curl http://localhost:8001/admin/templates -b cookies.txt
+
+# Logout
+curl -X POST http://localhost:8001/admin/logout -b cookies.txt
+```
 
 ---
 
@@ -296,23 +340,12 @@ Higher priority rules are prepended first (appear earlier in the final prompt):
 
 The following capabilities are planned but not yet implemented:
 
-### Personas with Competing Objectives
-AI characters with primary and competing goals that create productive friction. Example: "Support the user" vs. "Maintain your own boundaries."
-
-### Perturbations
-Adaptive challenges introduced during conversations. System would track user skill and adjust difficulty.
-
-### Wellbeing Metrics
-Tracking sentiment trajectory, distress signals, and skill development across sessions.
-
-### A/B Testing
-Compare template variants with automatic traffic splitting and metric collection.
-
-### Post-Generation Filtering
-Content evaluation AFTER the LLM generates a response. Would catch harmful outputs before delivery. (Current guardrails only modify prompts BEFORE generation.)
-
-### Model Configuration Dashboard
-UI for managing multiple models (Dolphin, Venice, etc.) with per-model guardrail defaults.
+- **Personas with Competing Objectives:** AI characters with primary and competing goals
+- **Perturbations:** Adaptive challenges during conversations
+- **Wellbeing Metrics:** Tracking sentiment and skill development
+- **A/B Testing:** Compare template variants
+- **Post-Generation Filtering:** Content evaluation after LLM generates response
+- **Model Configuration Dashboard:** UI for managing multiple models
 
 ---
 

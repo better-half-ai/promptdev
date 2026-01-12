@@ -25,9 +25,6 @@ Admins can optionally share templates with others via the shared library.
 ┌─────────────────────────────────────────────────────────┐
 │                    PromptDev SaaS                       │
 ├─────────────────────────────────────────────────────────┤
-│  Super Admin (from .env)                                │
-│  └── Can CRUD all admins                                │
-├─────────────────────────────────────────────────────────┤
 │  Admin A (tenant)          Admin B (tenant)             │
 │  ├── templates             ├── templates                │
 │  ├── shared templates ◄────┼── shared templates         │
@@ -74,6 +71,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.bashrc
 git clone https://github.com/better-half-ai/promptdev.git
 cd promptdev
 cp .env.example .env
+cp config.toml.example config.toml  # If needed
 # Edit .env with your credentials (see Configuration below)
 uv sync
 ```
@@ -91,8 +89,9 @@ make db-migrate db=remote
 ### Create Admin
 
 ```bash
-# Create first admin
-make admin-create db=remote email=admin@example.com password=secretpass123
+# Interactive - prompts for email and password
+make admin-create db=local
+make admin-create db=remote
 ```
 
 ### Run
@@ -103,13 +102,14 @@ make run db=local llm=local
 
 # Production
 make run db=remote llm=venice
+
+# Stop
+make stop
 ```
 
 ### Access
 
-- **Dashboard:** http://localhost:8001/dashboard
-- **Login:** http://localhost:8001/login
-- **Chat UI:** http://localhost:8001/chat-ui
+- **Dashboard:** http://localhost:8001/
 - **API Docs:** http://localhost:8001/docs
 
 ---
@@ -118,137 +118,115 @@ make run db=remote llm=venice
 
 ### Environment Variables (.env)
 
-```bash
-# Super Admin (not in database, checked at runtime)
-SUPER_ADMIN_EMAIL=super@yourdomain.com
-SUPER_ADMIN_PASSWORD=very_secure_super_admin_password
+Only secrets go in `.env`:
 
+```bash
 # Session Security
 SESSION_SECRET_KEY=random_32_char_hex_string
 
 # Database - Local
-PROMPTDEV_USER_PASS=your_local_db_password
+PROMPTDEV_USER_PASS=postgres
 
 # Database - Remote (Supabase)
 SUPABASE_PASSWORD=your_supabase_password
 
 # LLM - Venice.ai
 VENICE_API_KEY=your_venice_api_key
-VENICE_API_URL=https://api.venice.ai/api/v1
-VENICE_MODEL=mistral-31-24b
 ```
 
-### Super Admin
+### Config File (config.toml)
 
-The super admin is defined in `.env`, not in the database. Super admin can:
-- Create, list, deactivate, delete other admins
-- View all tenants (for support purposes)
+All non-secret config goes in `config.toml`:
 
-Super admin cannot access tenant data without explicit audit logging.
+```toml
+mode = "standalone"
+
+[mistral]
+url = "http://host.docker.internal:8080"
+
+[venice]
+url = "https://api.venice.ai/api/v1"
+model = "mistral-31-24b"
+
+[database]
+host = "postgres"
+port = 5432
+user = "promptdev_user"
+database = "promptdev_db"
+
+[remote_database]
+host = "your-project.pooler.supabase.com"
+port = 5432
+user = "postgres.your-project-id"
+database = "postgres"
+```
 
 ---
 
 ## Admin Management
 
 ```bash
-# Create admin
-make admin-create db=remote email=newadmin@example.com password=secretpass123
+# Create admin (interactive prompts for email/password)
+make admin-create db=local
+make admin-create db=remote
 
 # List all admins
+make admin-list db=local
 make admin-list db=remote
 
-# Deactivate admin (can't login, data preserved)
-make admin-deactivate db=remote email=badactor@example.com
+# Reset password (interactive)
+make admin-reset-password db=remote email=admin@example.com
+
+# Activate/deactivate admin
+make admin-activate db=remote email=admin@example.com
+make admin-deactivate db=remote email=admin@example.com
 ```
-
----
-
-## Authentication API
-
-All `/admin/*` routes require authentication via session cookie.
-
-### Login
-
-```bash
-# Login and save session cookie
-curl -X POST http://localhost:8000/admin/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"yourpassword"}' \
-  -c cookies.txt
-
-# Response: {"status":"ok","email":"admin@example.com","is_super":false}
-```
-
-### Using Authenticated Endpoints
-
-```bash
-# List your templates
-curl http://localhost:8000/admin/templates -b cookies.txt
-
-# Create a template
-curl -X POST http://localhost:8000/admin/templates \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my_persona","content":"You are a helpful assistant."}' \
-  -b cookies.txt
-
-# List users with conversations
-curl http://localhost:8000/admin/users -b cookies.txt
-
-# Halt a user
-curl -X POST http://localhost:8000/admin/users/user123/halt \
-  -H "Content-Type: application/json" \
-  -d '{"reason":"Testing intervention"}' \
-  -b cookies.txt
-```
-
-### Super Admin Endpoints
-
-```bash
-# Create another admin (super admin only)
-curl -X POST http://localhost:8000/super/admins \
-  -H "Content-Type: application/json" \
-  -d '{"email":"newadmin@example.com","password":"pass123"}' \
-  -b cookies.txt
-
-# List all admins
-curl http://localhost:8000/super/admins -b cookies.txt
-
-# Deactivate an admin
-curl -X PUT http://localhost:8000/super/admins/2 \
-  -H "Content-Type: application/json" \
-  -d '{"is_active":false}' \
-  -b cookies.txt
-```
-
-### Session Details
-
-- Cookie name: `promptdev_session`
-- Duration: 24 hours
-- Logout: `POST /admin/logout`
 
 ---
 
 ## Commands
 
-All commands require explicit `db=` and/or `llm=` parameters.
+All commands require explicit `db=` and/or `llm=` parameters. Run `make` or `make help` to see all available commands.
 
 ### Run
 
 ```bash
-make run db=local llm=local      # Local dev
-make run db=remote llm=venice    # Production
+make run db=local llm=local      # Local dev (Docker PostgreSQL + local Mistral)
+make run db=remote llm=venice    # Production (Supabase + Venice API)
 make stop                        # Stop all services
+make llm                         # Start local LLM server only
 ```
 
 ### Database
 
 ```bash
-make db-up                       # Start local PostgreSQL
-make db-reset                    # Nuke local DB and start fresh
+make db-up                       # Start local PostgreSQL container
+make db-reset                    # Nuke local DB volumes and start fresh
+make db-drop-remote              # Drop remote schema (destructive!)
 make db-migrate db=local         # Run migrations (local)
-make db-migrate db=remote        # Run migrations (Supabase)
+make db-migrate db=remote        # Run migrations (remote)
+make db-inspect db=local         # Show tables
 make db-shell db=local           # Open psql shell (local)
-make db-shell db=remote          # Open psql shell (Supabase)
+make db-shell db=remote          # Open psql shell (remote)
+```
+
+### Connection Tests
+
+```bash
+make test-db-local               # Test local PostgreSQL connection
+make test-db-remote              # Test Supabase connection
+```
+
+### Admin Management
+
+```bash
+make admin-create db=local                           # Create admin (interactive)
+make admin-create db=remote
+make admin-list db=local                             # List all admins
+make admin-list db=remote
+make admin-reset-password db=remote email=...        # Reset password (interactive)
+make admin-activate db=remote email=...              # Re-enable admin
+make admin-deactivate db=remote email=...            # Disable admin
 ```
 
 ### Testing
@@ -259,6 +237,43 @@ make test llm=venice             # Run tests with Venice API
 ```
 
 Tests use testcontainers (isolated PostgreSQL), not your local/remote DB.
+
+### Utilities
+
+```bash
+make health                      # Check backend health
+make clean                       # Clean Python cache files
+```
+
+---
+
+## Authentication
+
+Login at `http://localhost:8001/` with your admin credentials. Session cookie is set automatically.
+
+### API Authentication
+
+```bash
+# Login and save session cookie
+curl -X POST http://localhost:8001/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"yourpassword"}' \
+  -c cookies.txt
+
+# Use authenticated endpoints
+curl http://localhost:8001/admin/templates -b cookies.txt
+
+# Logout
+curl -X POST http://localhost:8001/admin/logout -b cookies.txt
+```
+
+Session duration: 24 hours.
+
+---
+
+## Default Template
+
+When a new admin logs in with no templates, the system automatically clones the default template for them.
 
 ---
 
@@ -289,10 +304,3 @@ All tables have `tenant_id` for complete isolation.
 5. Original and clone are completely independent
 
 Lineage tracked via `cloned_from_id` and `cloned_from_tenant`.
-
----
-
-## Documentation
-
-- [Operator Guide](docs/operator_guide.md) — How to use the dashboard
-- [Memory Architecture](docs/memory_architecture.md) — How user memory works

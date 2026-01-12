@@ -2,7 +2,7 @@
 
 ## Overview
 
-The memory module provides conversation history storage, user context management, and state tracking for the PromptDev system. It manages three independent storage areas in PostgreSQL, all keyed by `user_id`.
+The memory module provides conversation history storage, user context management, and state tracking for the PromptDev system. It manages three independent storage areas in PostgreSQL, all keyed by `user_id` and isolated by `tenant_id`.
 
 ---
 
@@ -28,6 +28,8 @@ memory.py Architecture
 │  Pagination support            Nested data OK       String  │
 │  Newest-first / Oldest-first   Auto-upsert          Upsert  │
 │                                                              │
+│  ALL FUNCTIONS REQUIRE tenant_id FOR ISOLATION              │
+│                                                              │
 └──────────────┬────────────────────┬──────────────────┬──────┘
                │                    │                  │
                ▼                    ▼                  ▼
@@ -36,6 +38,7 @@ memory.py Architecture
          │ history  │         │ memory   │      │ state    │
          │          │         │          │      │          │
          │ id       │         │ id       │      │ user_id  │
+         │ tenant_id│         │ tenant_id│      │ tenant_id│
          │ user_id  │         │ user_id  │      │ mode     │
          │ role     │         │ key      │      │ updated  │
          │ content  │         │ value    │      └──────────┘
@@ -47,6 +50,31 @@ memory.py Architecture
 
 ---
 
+## Multi-Tenant Isolation
+
+All memory operations are isolated by `tenant_id`. Each admin (tenant) can only access their own users' data.
+
+### The `_tenant_clause()` Helper
+
+All database queries use `_tenant_clause()` to handle tenant isolation:
+
+```python
+def _tenant_clause(tenant_id: Optional[int]) -> tuple[str, list]:
+    """Generate SQL clause for tenant filtering.
+    
+    Returns (sql_clause, params) tuple.
+    - tenant_id=None: Returns "tenant_id IS NULL" (system/global data)
+    - tenant_id=int: Returns "tenant_id = %s" with param
+    """
+    if tenant_id is None:
+        return "tenant_id IS NULL", []
+    return "tenant_id = %s", [tenant_id]
+```
+
+**Why this matters:** PostgreSQL treats `NULL != NULL`, so `WHERE tenant_id = NULL` returns nothing. The helper ensures correct NULL handling for system-level data.
+
+---
+
 ## Component Details
 
 ### 1. Conversation History
@@ -54,12 +82,12 @@ memory.py Architecture
 **Purpose:** Store chronological message exchanges between user and assistant.
 
 **Functions:**
-- `add_message(user_id, role, content)` → message_id
-- `get_conversation_history(user_id, limit, offset)` → List[ConversationMessage]
-- `get_recent_messages(user_id, count)` → List[ConversationMessage]
-- `count_messages(user_id)` → int
-- `clear_conversation_history(user_id)` → deleted_count
-- `delete_message(message_id)` → None
+- `add_message(user_id, role, content, tenant_id)` → message_id
+- `get_conversation_history(user_id, tenant_id, limit, offset)` → List[ConversationMessage]
+- `get_recent_messages(user_id, tenant_id, count)` → List[ConversationMessage]
+- `count_messages(user_id, tenant_id)` → int
+- `clear_conversation_history(user_id, tenant_id)` → deleted_count
+- `delete_message(message_id, tenant_id)` → None
 
 **Features:**
 - Role validation: Only `"user"` or `"assistant"` allowed
@@ -67,12 +95,13 @@ memory.py Architecture
 - Two retrieval modes:
   - `get_conversation_history()`: Newest first (for display)
   - `get_recent_messages()`: Oldest first (for prompt context)
-- User isolation: Each user's history is separate
+- Tenant isolation: Each tenant's users are separate
 
 **Database Schema:**
 ```sql
 conversation_history (
     id SERIAL PRIMARY KEY,
+    tenant_id INTEGER,  -- NULL for system, FK to admins for tenants
     user_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
@@ -84,12 +113,12 @@ conversation_history (
 ```python
 from src.memory import add_message, get_recent_messages
 
-# Store conversation
-add_message("user123", "user", "What is Python?")
-add_message("user123", "assistant", "Python is a programming language...")
+# Store conversation (tenant_id from authenticated admin)
+add_message("user123", "user", "What is Python?", tenant_id=1)
+add_message("user123", "assistant", "Python is a programming language...", tenant_id=1)
 
 # Get last 10 messages for prompt (oldest first)
-history = get_recent_messages("user123", count=10)
+history = get_recent_messages("user123", tenant_id=1, count=10)
 for msg in history:
     print(f"{msg.role}: {msg.content}")
 ```
@@ -101,27 +130,28 @@ for msg in history:
 **Purpose:** Store flexible user context, preferences, and metadata.
 
 **Functions:**
-- `set_memory(user_id, key, value: dict)` → memory_id
-- `get_memory(user_id, key)` → dict | None
-- `get_all_memory(user_id)` → List[UserMemory]
-- `delete_memory(user_id, key)` → None
-- `clear_all_memory(user_id)` → deleted_count
+- `set_memory(user_id, key, value: dict, tenant_id)` → memory_id
+- `get_memory(user_id, key, tenant_id)` → dict | None
+- `get_all_memory(user_id, tenant_id)` → List[UserMemory]
+- `delete_memory(user_id, key, tenant_id)` → None
+- `clear_all_memory(user_id, tenant_id)` → deleted_count
 
 **Features:**
 - JSONB storage: Supports complex nested data structures
-- Automatic upsert: `ON CONFLICT (user_id, key) DO UPDATE`
+- Automatic upsert: `ON CONFLICT (tenant_id, user_id, key) DO UPDATE`
 - No schema required: Store any dict structure
-- Unique constraint: (user_id, key) pair must be unique
+- Unique constraint: (tenant_id, user_id, key) must be unique
 
 **Database Schema:**
 ```sql
 user_memory (
     id SERIAL PRIMARY KEY,
+    tenant_id INTEGER,
     user_id TEXT NOT NULL,
     key TEXT NOT NULL,
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(user_id, key)
+    UNIQUE(tenant_id, user_id, key)
 )
 ```
 
@@ -134,48 +164,50 @@ set_memory("user123", "preferences", {
     "language": "en",
     "expertise_level": "intermediate",
     "topic_interest": "Python debugging"
-})
+}, tenant_id=1)
 
 # Store conversation context
 set_memory("user123", "context", {
     "current_topic": "async/await",
     "questions_asked": 3,
     "depth": "advanced"
-})
+}, tenant_id=1)
 
 # Retrieve for prompt building
-prefs = get_memory("user123", "preferences")
+prefs = get_memory("user123", "preferences", tenant_id=1)
 print(prefs["expertise_level"])  # → "intermediate"
 
 # Update (automatic upsert)
 set_memory("user123", "preferences", {
     "language": "en",
     "expertise_level": "advanced"  # Updated
-})
+}, tenant_id=1)
 ```
 
 ---
 
 ### 3. User State
 
-**Purpose:** Track simple user mode/status.
+**Purpose:** Track simple user mode/status (e.g., active, halted).
 
 **Functions:**
-- `set_user_state(user_id, mode)` → None
-- `get_user_state(user_id)` → UserState | None
-- `delete_user_state(user_id)` → None
+- `set_user_state(user_id, mode, tenant_id)` → None
+- `get_user_state(user_id, tenant_id)` → UserState | None
+- `delete_user_state(user_id, tenant_id)` → None
 
 **Features:**
 - Single mode string per user
-- Automatic upsert: `ON CONFLICT (user_id) DO UPDATE`
+- Automatic upsert: `ON CONFLICT (tenant_id, user_id) DO UPDATE`
 - Timestamp tracking
 
 **Database Schema:**
 ```sql
 user_state (
-    user_id TEXT PRIMARY KEY,
+    tenant_id INTEGER,
+    user_id TEXT NOT NULL,
     mode TEXT NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, user_id)
 )
 ```
 
@@ -183,13 +215,16 @@ user_state (
 ```python
 from src.memory import set_user_state, get_user_state
 
-# Set user state
-set_user_state("user123", "active")
+# Halt a user
+set_user_state("user123", "halted", tenant_id=1)
 
 # Check state
-state = get_user_state("user123")
-if state and state.mode == "active":
-    print("User is active")
+state = get_user_state("user123", tenant_id=1)
+if state and state.mode == "halted":
+    print("User is halted")
+
+# Resume
+set_user_state("user123", "active", tenant_id=1)
 ```
 
 ---
@@ -199,33 +234,45 @@ if state and state.mode == "active":
 ### Typical Chat Flow
 
 ```
-1. User sends message
-   └─→ add_message("user123", "user", "Hello")
+1. User sends message (tenant_id from admin session)
+   └─→ add_message("user123", "user", "Hello", tenant_id=1)
 
 2. Retrieve context
-   ├─→ history = get_recent_messages("user123", 10)
-   ├─→ prefs = get_memory("user123", "preferences")
-   └─→ context = get_memory("user123", "context")
+   ├─→ history = get_recent_messages("user123", tenant_id=1, count=10)
+   ├─→ prefs = get_memory("user123", "preferences", tenant_id=1)
+   └─→ context = get_memory("user123", "context", tenant_id=1)
 
-3. Build prompt (context.py uses this data)
+3. Build prompt (prompts.py uses this data)
    └─→ render_template(template_id, {
            "history": history,
            "user_prefs": prefs,
            "context": context
-       })
+       }, tenant_id=1)
 
 4. Get LLM response (llm_client.py)
-   └─→ response = call_mistral(prompt)
+   └─→ response = call_llm(prompt)
 
 5. Store assistant response
-   └─→ add_message("user123", "assistant", response)
+   └─→ add_message("user123", "assistant", response, tenant_id=1)
 ```
 
 ---
 
 ## Key Design Decisions
 
-### 1. Dual History Retrieval Modes
+### 1. Tenant Isolation First
+
+**Every function requires tenant_id** to ensure:
+- Complete data isolation between admins
+- No cross-tenant data leakage
+- Security by design
+
+### 2. NULL Tenant for System Data
+
+- `tenant_id = NULL` represents system-level data (e.g., default templates)
+- `_tenant_clause()` handles NULL correctly with `IS NULL` instead of `= NULL`
+
+### 3. Dual History Retrieval Modes
 
 **Why two functions?**
 - `get_conversation_history()`: Newest first → for UI display
@@ -233,7 +280,7 @@ if state and state.mode == "active":
 
 **Rationale:** Prompts need chronological order (oldest→newest), but UIs typically show newest first.
 
-### 2. JSONB for User Memory
+### 4. JSONB for User Memory
 
 **Why JSONB instead of columns?**
 - Flexible schema: No migrations needed for new fields
@@ -241,20 +288,13 @@ if state and state.mode == "active":
 - PostgreSQL native: Fast queries and indexing
 - Type preservation: Booleans, numbers, arrays preserved
 
-### 3. Upsert Pattern
+### 5. Upsert Pattern
 
 **Why ON CONFLICT instead of SELECT then INSERT/UPDATE?**
 - Atomic operation: No race conditions
 - Fewer queries: Single statement
 - Simpler code: No existence checking
 - Better performance: One round-trip to DB
-
-### 4. User Isolation by Design
-
-**Every function requires user_id** to prevent:
-- Cross-user data leakage
-- Accidental global operations
-- Security vulnerabilities
 
 ---
 
@@ -294,18 +334,18 @@ finally:
 ### Pagination
 ```python
 # Good: Fetch only what you need
-history = get_conversation_history("user123", limit=10)
+history = get_conversation_history("user123", tenant_id=1, limit=10)
 
 # Bad: Fetch everything
-history = get_conversation_history("user123")  # Could be 10,000+ messages
+history = get_conversation_history("user123", tenant_id=1)  # Could be 10,000+ messages
 ```
 
 ### Indexing
 Ensure these indexes exist:
 ```sql
-CREATE INDEX idx_conv_user_created ON conversation_history(user_id, created_at DESC);
-CREATE INDEX idx_memory_user_key ON user_memory(user_id, key);
-CREATE INDEX idx_state_user ON user_state(user_id);
+CREATE INDEX idx_conv_tenant_user_created ON conversation_history(tenant_id, user_id, created_at DESC);
+CREATE INDEX idx_memory_tenant_user_key ON user_memory(tenant_id, user_id, key);
+CREATE INDEX idx_state_tenant_user ON user_state(tenant_id, user_id);
 ```
 
 ### Memory Cleanup
@@ -313,45 +353,9 @@ CREATE INDEX idx_state_user ON user_state(user_id);
 # Periodically clear old history
 from src.memory import count_messages, clear_conversation_history
 
-if count_messages("user123") > 1000:
-    # Keep only recent 100 messages
-    history = get_conversation_history("user123", limit=100)
-    clear_conversation_history("user123")
-    # Re-insert recent 100
-    for msg in reversed(history):
-        add_message("user123", msg.role, msg.content)
-```
-
----
-
-## Integration Points
-
-### Used By
-
-**context.py** (next to implement):
-```python
-from src.memory import get_recent_messages, get_all_memory
-
-def build_prompt_context(user_id):
-    history = get_recent_messages(user_id, count=10)
-    memories = get_all_memory(user_id)
-    return {"history": history, "memories": memories}
-```
-
-**main.py** (chat endpoint):
-```python
-from src.memory import add_message
-
-@app.post("/chat")
-async def chat(user_id: str, message: str):
-    # Store user message
-    add_message(user_id, "user", message)
-    
-    # Build context and get response
-    # ...
-    
-    # Store assistant response
-    add_message(user_id, "assistant", response)
+if count_messages("user123", tenant_id=1) > 1000:
+    # Archive or truncate old messages
+    clear_conversation_history("user123", tenant_id=1)
 ```
 
 ---
@@ -361,12 +365,13 @@ async def chat(user_id: str, message: str):
 ### Core Test Coverage
 
 ```python
-# Conversation tests
+# Conversation tests (all with tenant_id)
 test_add_message_user()
 test_get_conversation_history()
 test_get_recent_messages()
 test_count_messages()
 test_clear_conversation_history()
+test_tenant_isolation()  # Verify cross-tenant blocked
 
 # Memory tests
 test_set_memory()
@@ -405,6 +410,7 @@ def db_connection(test_db, postgres_container):
 ```python
 class ConversationMessage(BaseModel):
     id: int
+    tenant_id: Optional[int]
     user_id: str
     role: str  # "user" | "assistant"
     content: str
@@ -412,14 +418,15 @@ class ConversationMessage(BaseModel):
 
 class UserMemory(BaseModel):
     id: int
+    tenant_id: Optional[int]
     user_id: str
     key: str
     value: dict[str, Any]  # JSONB
     updated_at: datetime
 
 class UserState(BaseModel):
+    tenant_id: Optional[int]
     user_id: str
     mode: str
     updated_at: datetime
 ```
-
