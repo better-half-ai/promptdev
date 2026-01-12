@@ -129,8 +129,8 @@
         
         <form id="loginForm">
             <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autocomplete="username">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required autocomplete="email">
             </div>
             
             <div class="form-group">
@@ -150,7 +150,7 @@
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const username = document.getElementById('username').value;
+            const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             
             errorDiv.classList.remove('show');
@@ -163,11 +163,10 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ username, password }),
+                    body: JSON.stringify({ email, password }),
                 });
                 
                 if (response.ok) {
-                    // Redirect to dashboard
                     window.location.href = '/dashboard';
                 } else {
                     const data = await response.json();
