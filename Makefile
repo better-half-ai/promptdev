@@ -2,6 +2,11 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
+# Remote VM configuration
+VM_HOST := 94.103.168.100
+VM_USER := ubuntu
+VM_KEY := ~/.ssh/fluencevm
+
 # Validate db= is set and valid
 check-db:
 ifndef db
@@ -42,10 +47,10 @@ help:
 	@echo "  make db-reset         Nuke local volumes and start fresh"
 	@echo ""
 	@echo "🗄️  DATABASE (auto-starts containers if needed)"
-	@echo "  make db-migrate db=... [llm=...]  Run migrations (llm required for local)"
-	@echo "  make db-inspect db=... [llm=...]  Show tables (llm required for local)"
-	@echo "  make db-shell db=...              Open psql shell"
-	@echo "  make db-drop-remote               Drop remote schema (destructive!)"
+	@echo "  make db-migrate db=...    Run migrations"
+	@echo "  make db-inspect db=...    Show tables"
+	@echo "  make db-shell db=...      Open psql shell"
+	@echo "  make db-drop-remote       Drop remote schema (destructive!)"
 	@echo ""
 	@echo "🔌 CONNECTION TESTS"
 	@echo "  make test-db-local    Test local PostgreSQL connection"
@@ -55,15 +60,20 @@ help:
 	@echo "  make test llm=...    Run tests with specified LLM"
 	@echo ""
 	@echo "👤 ADMIN MANAGEMENT"
-	@echo "  make admin-create db=...                     Create admin (interactive)"
-	@echo "  make admin-list db=...                       List all admins"
-	@echo "  make admin-reset-password db=... email=...   Reset admin password"
-	@echo "  make admin-activate db=... email=...         Activate admin"
-	@echo "  make admin-deactivate db=... email=...       Deactivate admin"
+	@echo "  make admin-create db=... email=... password=...  Create admin"
+	@echo "  make admin-list db=...                           List all admins"
+	@echo "  make admin-deactivate db=... email=...           Deactivate admin"
+	@echo ""
+	@echo "🌐 REMOTE VM"
+	@echo "  make deploy               Deploy to remote VM"
+	@echo "  make remote-restart       Restart promptdev service"
+	@echo "  make remote-logs          View error logs"
+	@echo "  make remote-status        Check service status"
+	@echo "  make ssh                  SSH into remote VM"
 	@echo ""
 	@echo "🔧 UTILITIES"
-	@echo "  make health                       Check backend health"
-	@echo "  make clean                        Clean Python cache files"
+	@echo "  make health               Check backend health"
+	@echo "  make clean                Clean Python cache files"
 	@echo ""
 
 # ============================================================================
@@ -162,6 +172,26 @@ test: check-llm
 	@uv run pytest -s --llm=$(llm)
 
 # ============================================================================
+# REMOTE VM
+# ============================================================================
+
+ssh:
+	@ssh -i $(VM_KEY) $(VM_USER)@$(VM_HOST)
+
+deploy:
+	@cd ansible && ansible-playbook -i inventory.yml deploy.yml
+
+remote-restart:
+	@ssh -i $(VM_KEY) $(VM_USER)@$(VM_HOST) "sudo systemctl restart promptdev"
+	@echo "✅ promptdev restarted"
+
+remote-logs:
+	@ssh -i $(VM_KEY) $(VM_USER)@$(VM_HOST) "sudo tail -50 /var/log/promptdev/error.log"
+
+remote-status:
+	@ssh -i $(VM_KEY) $(VM_USER)@$(VM_HOST) "sudo systemctl status promptdev"
+
+# ============================================================================
 # UTILITIES
 # ============================================================================
 
@@ -169,11 +199,17 @@ health:
 	@curl -sf http://localhost:8001/health && echo "✅ Backend healthy" || echo "❌ Backend not responding"
 
 admin-create: check-db
+ifndef email
+	$(error email= is required. Usage: make admin-create db=... email=... password=...)
+endif
+ifndef password
+	$(error password= is required. Usage: make admin-create db=... email=... password=...)
+endif
 ifeq ($(db),local)
 	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
 	@sleep 2
 endif
-	@uv run python -m scripts.create_admin --db=$(db)
+	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --password=$(password)
 
 admin-list: check-db
 ifeq ($(db),local)
@@ -181,26 +217,6 @@ ifeq ($(db),local)
 	@sleep 2
 endif
 	@uv run python -m scripts.create_admin --db=$(db) --list
-
-admin-reset-password: check-db
-ifndef email
-	$(error email= is required. Usage: make admin-reset-password db=... email=...)
-endif
-ifeq ($(db),local)
-	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
-	@sleep 2
-endif
-	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --reset-password
-
-admin-activate: check-db
-ifndef email
-	$(error email= is required. Usage: make admin-activate db=... email=...)
-endif
-ifeq ($(db),local)
-	@LLM_BACKEND=x docker compose --profile local up -d postgres 2>/dev/null || true
-	@sleep 2
-endif
-	@uv run python -m scripts.create_admin --db=$(db) --email=$(email) --activate
 
 admin-deactivate: check-db
 ifndef email
@@ -217,4 +233,4 @@ clean:
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleaned"
 
-.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-reset-password admin-activate admin-deactivate clean check-db check-llm
+.PHONY: help llm run stop db-up db-reset db-drop-remote db-migrate db-inspect db-shell test-db-local test-db-remote test health admin-create admin-list admin-deactivate clean check-db check-llm ssh deploy remote-restart remote-logs remote-status

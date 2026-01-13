@@ -17,6 +17,7 @@ dependencies = [
     "pytest-asyncio",
     "bcrypt>=4.0.0",
     "itsdangerous>=2.0.0",
+    "pyjwt>=2.10.1",
 ]
 
 [build-system]
