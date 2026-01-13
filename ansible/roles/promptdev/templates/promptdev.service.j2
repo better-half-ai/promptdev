@@ -9,6 +9,8 @@ Group={{ app_user }}
 WorkingDirectory={{ app_dir }}
 EnvironmentFile={{ app_dir }}/.env
 Environment="DB_TARGET=remote"
+Environment="LLM_BACKEND=venice"
+Environment="VENICE_API_KEY=DcKMs9Qu2CRa5V4dkafkvAG3LVrUK9srMbCMSeE9SK"
 ExecStart={{ app_dir }}/.venv/bin/uvicorn src.main:app --host {{ app_host }} --port {{ app_port }}
 Restart=always
 RestartSec=5

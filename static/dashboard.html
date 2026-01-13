@@ -41,6 +41,36 @@
             background: #667eea;
             color: #fff;
         }
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 20px;
+            border-top: 1px solid #2a2a2a;
+        }
+        .admin-info {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 12px;
+        }
+        .admin-info div {
+            margin-bottom: 4px;
+        }
+        .admin-email {
+            color: #667eea;
+            font-weight: 500;
+        }
+        .btn-logout {
+            width: 100%;
+            padding: 10px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .btn-logout:hover {
+            background: #c0392b;
+        }
         .main {
             flex: 1;
             overflow-y: auto;
@@ -302,6 +332,14 @@
         <div class="nav-item active" onclick="showView('dashboard')">Dashboard</div>
         <div class="nav-item" onclick="showView('personalities')">Personalities</div>
         <div class="nav-item" onclick="showView('monitor')">Monitor</div>
+        
+        <div class="sidebar-footer">
+            <div class="admin-info">
+                <div class="admin-email" id="admin-email">Loading...</div>
+                <div id="admin-role">-</div>
+            </div>
+            <button class="btn-logout" onclick="logout()">Sign Out</button>
+        </div>
     </div>
     
     <div class="main">
@@ -414,10 +452,6 @@
                     <textarea id="create-content" required placeholder="You are {{role}}..."></textarea>
                 </div>
                 <div class="form-group">
-                    <label>Created By *</label>
-                    <input type="text" id="create-by" required placeholder="Your name or ID">
-                </div>
-                <div class="form-group">
                     <label>Initial Description</label>
                     <input type="text" id="create-description" placeholder="Initial template creation">
                 </div>
@@ -436,9 +470,37 @@
         
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
+            loadAdminInfo();
             loadDashboardStats();
             loadTemplates();
         });
+        
+        // Load admin info
+        async function loadAdminInfo() {
+            try {
+                const res = await fetch(API + '/admin/me', { credentials: 'include' });
+                if (!res.ok) {
+                    window.location.href = '/login';
+                    return;
+                }
+                const data = await res.json();
+                document.getElementById('admin-email').textContent = data.email;
+                document.getElementById('admin-role').textContent = data.is_super ? 'Super Admin' : 'Admin';
+            } catch (e) {
+                console.error('Failed to load admin info:', e);
+                window.location.href = '/login';
+            }
+        }
+
+        // Logout
+        async function logout() {
+            try {
+                await fetch(API + '/admin/logout', { method: 'POST', credentials: 'include' });
+            } catch (e) {
+                console.error('Logout error:', e);
+            }
+            window.location.href = '/login';
+        }
         
         // Navigation
         function showView(viewName) {
@@ -477,7 +539,8 @@
         // Dashboard Stats
         async function loadDashboardStats() {
             try {
-                const res = await fetch(API + '/admin/stats/overview');
+                const res = await fetch(API + '/admin/stats/overview', { credentials: 'include' });
+                if (!res.ok) return;
                 const data = await res.json();
                 
                 document.getElementById('dash-active-users').textContent = data.active_users_today || 0;
@@ -494,7 +557,8 @@
         
         async function loadUsers() {
             try {
-                const res = await fetch(API + '/admin/users');
+                const res = await fetch(API + '/admin/users', { credentials: 'include' });
+                if (!res.ok) return;
                 const data = await res.json();
                 allUsers = data.users;
                 filterUsers();
@@ -572,7 +636,7 @@
         
         async function loadTemplates() {
             try {
-                const response = await fetch(API + '/admin/templates?include_inactive=true');
+                const response = await fetch(API + '/admin/templates?include_inactive=true', { credentials: 'include' });
                 if (!response.ok) throw new Error('Failed to load templates');
                 
                 const data = await response.json();
@@ -671,16 +735,15 @@
             
             const name = document.getElementById('create-name').value;
             const content = document.getElementById('create-content').value;
-            const createdBy = document.getElementById('create-by').value;
             
             try {
                 const response = await fetch(API + '/admin/templates', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({
                         name: name,
-                        content: content,
-                        created_by: createdBy
+                        content: content
                     })
                 });
                 
@@ -713,7 +776,8 @@
             
             try {
                 const response = await fetch(API + `/admin/templates/${templateId}/deactivate`, {
-                    method: 'POST'
+                    method: 'POST',
+                    credentials: 'include'
                 });
                 
                 if (!response.ok) throw new Error('Failed to deactivate');
@@ -729,7 +793,8 @@
         async function activateTemplate(templateId, templateName) {
             try {
                 const response = await fetch(API + `/admin/templates/${templateId}/activate`, {
-                    method: 'POST'
+                    method: 'POST',
+                    credentials: 'include'
                 });
                 
                 if (!response.ok) throw new Error('Failed to activate');
@@ -755,7 +820,8 @@
             
             try {
                 const response = await fetch(API + `/admin/templates/${templateId}`, {
-                    method: 'DELETE'
+                    method: 'DELETE',
+                    credentials: 'include'
                 });
                 
                 if (!response.ok) throw new Error('Failed to delete');

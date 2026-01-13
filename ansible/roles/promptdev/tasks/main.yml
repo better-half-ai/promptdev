@@ -5,7 +5,6 @@
     system: yes
     shell: /bin/false
     create_home: no
-
 - name: Install system dependencies
   apt:
     name:
@@ -14,7 +13,6 @@
       - rsync
     state: present
     update_cache: yes
-
 - name: Create application directories
   file:
     path: "{{ item }}"
@@ -32,7 +30,6 @@
     - "{{ data_dir }}"
     - "{{ data_dir }}/models"
     - "{{ log_dir }}"
-
 - name: Copy src
   synchronize:
     src: "{{ playbook_dir }}/../src/"
@@ -40,7 +37,6 @@
     rsync_opts:
       - "--exclude=__pycache__/"
   notify: restart promptdev
-
 - name: Copy db
   synchronize:
     src: "{{ playbook_dir }}/../db/"
@@ -48,17 +44,14 @@
     rsync_opts:
       - "--exclude=__pycache__/"
   notify: restart promptdev
-
 - name: Copy static files
   synchronize:
     src: "{{ playbook_dir }}/../static/"
     dest: "{{ app_dir }}/static/"
-
 - name: Copy migrations
   synchronize:
     src: "{{ playbook_dir }}/../migrations/"
     dest: "{{ app_dir }}/migrations/"
-
 - name: Copy sentiment-analysis
   synchronize:
     src: "{{ playbook_dir }}/../sentiment-analysis/"
@@ -68,7 +61,6 @@
       - "--exclude=.venv/"
       - "--exclude=__pycache__/"
   notify: restart promptdev
-
 - name: Copy .env
   copy:
     src: "{{ playbook_dir }}/../.env"
@@ -77,7 +69,6 @@
     group: "{{ app_user }}"
     mode: '0600'
   notify: restart promptdev
-
 - name: Copy config.toml
   copy:
     src: "{{ playbook_dir }}/../config.toml"
@@ -86,12 +77,10 @@
     group: "{{ app_user }}"
     mode: '0600'
   notify: restart promptdev
-
 - name: Install uv
   shell: curl -LsSf https://astral.sh/uv/install.sh | sh
   args:
     creates: /root/.local/bin/uv
-
 - name: Create venv and install deps
   shell: |
     export PATH="/root/.local/bin:$PATH"
@@ -100,9 +89,9 @@
     uv pip install --python .venv/bin/python \
       fastapi 'uvicorn[standard]' httpx psycopg2-binary \
       prometheus-client python-dotenv pydantic jinja2 \
-      bcrypt itsdangerous \
+      bcrypt itsdangerous pyjwt \
       transformers torch onnxruntime numpy tomli
-
+  notify: restart promptdev
 - name: Download sentiment models
   shell: |
     {{ app_dir }}/.venv/bin/python -c "
@@ -112,7 +101,6 @@
     "
   args:
     creates: "{{ data_dir }}/models/models--cardiffnlp--twitter-roberta-base-sentiment-latest"
-
 - name: Fix ownership
   file:
     path: "{{ item }}"
@@ -123,7 +111,6 @@
     - "{{ app_dir }}"
     - "{{ config_dir }}"
     - "{{ data_dir }}"
-
 - name: Deploy systemd service
   template:
     src: promptdev.service.j2
@@ -134,7 +121,6 @@
   notify:
     - reload systemd
     - restart promptdev
-
 - name: Ensure promptdev is running
   systemd:
     name: promptdev

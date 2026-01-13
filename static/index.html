@@ -172,8 +172,15 @@
                 const res = await fetch(API + '/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
                     body: JSON.stringify({user_id: userId, message: msg})
                 });
+                
+                if (res.status === 401) {
+                    addMessage("assistant", "⚠️ Not authenticated. Please log in first.");
+                    window.location.href = '/login';
+                    return;
+                }
                 
                 if (res.status === 423) {
                     addMessage("assistant", "⚠️ Conversation paused. Please contact support.");
@@ -207,7 +214,13 @@
         // Load history
         async function loadHistory() {
             try {
-                const res = await fetch(API + `/chat/history?user_id=${userId}&limit=50`);
+                const res = await fetch(API + `/chat/history?user_id=${userId}&limit=50`, {
+                    credentials: 'include'
+                });
+                if (res.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 const data = await res.json();
                 data.messages.forEach(m => {
                     addMessage(m.role, m.content);
