@@ -18,6 +18,7 @@ from enum import Enum
 
 import jwt
 import bcrypt
+import psycopg2.extras
 from fastapi import HTTPException, status, Cookie, Request, Depends
 
 from db.db import get_conn, put_conn
@@ -167,7 +168,7 @@ def authenticate_admin(email: str, password: str) -> Optional[Admin]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, email, password_hash, is_active
+                SELECT id, email, password_hash, is_active, COALESCE(is_super, false)
                 FROM admins WHERE email = %s
                 """,
                 (email,)
@@ -176,7 +177,7 @@ def authenticate_admin(email: str, password: str) -> Optional[Admin]:
             if not row:
                 return None
             
-            admin_id, admin_email, password_hash, is_active = row
+            admin_id, admin_email, password_hash, is_active, is_super = row
             
             if not is_active:
                 return None
@@ -190,9 +191,6 @@ def authenticate_admin(email: str, password: str) -> Optional[Admin]:
                 (admin_id,)
             )
             conn.commit()
-            
-            # Check if super admin (id=1 or explicitly set)
-            is_super = admin_id == 1
             
             return Admin(id=admin_id, email=admin_email, is_super=is_super)
     finally:
@@ -685,7 +683,8 @@ def audit_log(
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (admin.id, admin.email, action, resource_type, resource_id, details, ip_address, user_agent)
+                (admin.id, admin.email, action, resource_type, resource_id, 
+                 psycopg2.extras.Json(details) if details else None, ip_address, user_agent)
             )
             log_id = cur.fetchone()[0]
             conn.commit()

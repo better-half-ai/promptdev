@@ -592,7 +592,7 @@
                 <tr style="border-bottom: 1px solid #2a2a2a;">
                     <td style="padding: 16px; font-family: monospace; color: #667eea;">${u.user_id}</td>
                     <td style="padding: 16px;">${u.message_count}</td>
-                    <td style="padding: 16px; color: #888; font-size: 0.9em;">${new Date(u.last_activity).toLocaleString()}</td>
+                    <td style="padding: 16px; color: #888; font-size: 0.9em;">${u.last_seen ? new Date(u.last_seen).toLocaleString() : 'Never'}</td>
                     <td style="padding: 16px;">
                         <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; 
                                      background: ${u.state === 'halted' ? 'rgba(231, 76, 60, 0.2)' : 'rgba(39, 174, 96, 0.2)'};

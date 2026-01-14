@@ -141,7 +141,12 @@
 
     <script>
         const API = '';
-        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+        // Persist user_id in localStorage
+        let userId = localStorage.getItem('promptdev_user_id');
+        if (!userId) {
+            userId = 'user_' + Math.random().toString(36).substr(2, 9);
+            localStorage.setItem('promptdev_user_id', userId);
+        }
         const messages = document.getElementById("messages");
         const input = document.getElementById("input");
         const sendBtn = document.getElementById("send");

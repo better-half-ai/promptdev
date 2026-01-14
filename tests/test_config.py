@@ -33,6 +33,18 @@ password = "ybh_dev_pass"
 database = "ybh_promptdev"
 max_connections = 10
 
+[remote_database]
+host = "remote.example.com"
+port = 5432
+user = "remote_user"
+password = "remote_pass"
+database = "remote_db"
+max_connections = 10
+
+[venice]
+url = "https://api.venice.ai/api/v1"
+model = "mistral-31-24b"
+
 [security]
 paseto_public_key = ""
 """
@@ -69,6 +81,18 @@ user = "ybh_user"
 password = "ybh_dev_pass"
 database = "ybh_promptdev"
 max_connections = 10
+
+[remote_database]
+host = "remote.example.com"
+port = 5432
+user = "remote_user"
+password = "remote_pass"
+database = "remote_db"
+max_connections = 10
+
+[venice]
+url = "https://api.venice.ai/api/v1"
+model = "mistral-31-24b"
 
 [security]
 paseto_public_key = "v4.public.DUMMY"

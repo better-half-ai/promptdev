@@ -10,6 +10,7 @@ Provides:
 
 import sys
 import os
+import logging
 from pathlib import Path
 import pytest
 import psycopg2
@@ -23,6 +24,10 @@ sys.path.insert(0, str(ROOT))
 
 # Load .env file for API keys
 load_dotenv(ROOT / ".env")
+
+# Control migration output verbosity (set VERBOSE_MIGRATIONS=1 to see output)
+VERBOSE_MIGRATIONS = os.environ.get("VERBOSE_MIGRATIONS", "0") == "1"
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -78,7 +83,7 @@ def mistral_available(llm_backend, llm_url):
     
     try:
         return asyncio.run(health_check(config))
-    except:
+    except Exception:
         return False
 
 
@@ -115,9 +120,11 @@ def test_db(postgres_container, migrations_dir):
     
     # Run all migrations in order
     migration_files = sorted(migrations_dir.glob("*.sql"))
-    print(f"\n=== Running {len(migration_files)} migrations ===")
+    if VERBOSE_MIGRATIONS:
+        print(f"\n=== Running {len(migration_files)} migrations ===")
     for migration in migration_files:
-        print(f"  Running: {migration.name}")
+        if VERBOSE_MIGRATIONS:
+            print(f"  Running: {migration.name}")
         with migration.open("r") as f:
             sql = f.read()
             try:
@@ -126,7 +133,7 @@ def test_db(postgres_container, migrations_dir):
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                print(f"  ERROR in {migration.name}: {e}")
+                logger.error(f"Migration error in {migration.name}: {e}")
                 raise
     
     # Verify schema
@@ -144,7 +151,8 @@ def test_db(postgres_container, migrations_dir):
             raise RuntimeError(f"Schema error: tenant_id missing. Columns: {cols}")
     
     conn.close()
-    print("=== Migrations complete ===\n")
+    if VERBOSE_MIGRATIONS:
+        print("=== Migrations complete ===\n")
     yield
 
 
@@ -153,24 +161,29 @@ def db_module(postgres_container, test_db, llm_url):
     """Database module with clean state per test."""
     import db.db as db_module
     import src.config
-    from src.config import Config, MistralConfig, TestMistralConfig, DatabaseConfig, SecurityConfig
+    from src.config import Config, MistralConfig, TestMistralConfig, DatabaseConfig, SecurityConfig, VeniceConfig
 
     # Reset connection pool
     db_module._pool = None
+
+    # Create test DB config
+    test_db_config = DatabaseConfig(
+        host=os.environ["TEST_DB_HOST"],
+        port=int(os.environ["TEST_DB_PORT"]),
+        user=os.environ["TEST_DB_USER"],
+        password=os.environ["TEST_DB_PASSWORD"],
+        database=os.environ["TEST_DB_NAME"],
+        max_connections=10
+    )
 
     # Create test config pointing to testcontainer
     test_config = Config(
         mode="test",
         mistral=MistralConfig(url=llm_url),
         test_mistral=TestMistralConfig(url=llm_url),
-        database=DatabaseConfig(
-            host=os.environ["TEST_DB_HOST"],
-            port=int(os.environ["TEST_DB_PORT"]),
-            user=os.environ["TEST_DB_USER"],
-            password=os.environ["TEST_DB_PASSWORD"],
-            database=os.environ["TEST_DB_NAME"],
-            max_connections=10
-        ),
+        database=test_db_config,
+        remote_database=test_db_config,
+        venice=VeniceConfig(url=llm_url, model="test-model"),
         security=SecurityConfig()
     )
 
@@ -194,6 +207,18 @@ def db_module(postgres_container, test_db, llm_url):
             for table in tables:
                 if table not in preserve_tables:
                     cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+            
+            # Ensure guardrail presets exist (re-seed if needed)
+            cur.execute("""
+                INSERT INTO guardrail_configs (name, description, rules, created_by, is_active, tenant_id)
+                VALUES
+                    ('unrestricted', 'No content filtering - full model capabilities', '[]', 'system', true, NULL),
+                    ('research_safe', 'Academic research mode with source citation requirements', 
+                     '[{"type": "system_instruction", "content": "Always cite sources and maintain academic rigor."}]', 'system', true, NULL),
+                    ('clinical', 'Healthcare-appropriate responses with medical disclaimers', 
+                     '[{"type": "system_instruction", "content": "Include appropriate medical disclaimers and recommend professional consultation."}]', 'system', true, NULL)
+                ON CONFLICT (COALESCE(tenant_id, 0), name) DO NOTHING
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -220,7 +245,7 @@ def test_admin(db_module):
     from src.auth import create_admin, Admin
     
     admin_id = create_admin(TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
-    return Admin(id=admin_id, email=TEST_ADMIN_EMAIL, tenant_id=admin_id, is_super=False)
+    return Admin(id=admin_id, email=TEST_ADMIN_EMAIL, is_super=False)
 
 
 @pytest.fixture
@@ -240,10 +265,10 @@ def auth_client(db_module, test_admin, test_admin_token):
     """Authenticated test client for admin routes."""
     from fastapi.testclient import TestClient
     from src.main import app
-    from src.auth import SESSION_COOKIE_NAME
+    from src.auth import ADMIN_SESSION_COOKIE
     
     client = TestClient(app)
-    client.cookies.set(SESSION_COOKIE_NAME, test_admin_token)
+    client.cookies.set(ADMIN_SESSION_COOKIE, test_admin_token)
     
     return client
 
@@ -253,7 +278,7 @@ def super_admin_client(db_module):
     """Super admin authenticated test client."""
     from fastapi.testclient import TestClient
     from src.main import app
-    from src.auth import create_session_token, SESSION_COOKIE_NAME
+    from src.auth import create_session_token, ADMIN_SESSION_COOKIE
     
     token = create_session_token(
         admin_id=None,
@@ -262,7 +287,7 @@ def super_admin_client(db_module):
     )
     
     client = TestClient(app)
-    client.cookies.set(SESSION_COOKIE_NAME, token)
+    client.cookies.set(ADMIN_SESSION_COOKIE, token)
     
     return client
 
@@ -273,7 +298,7 @@ def second_admin(db_module):
     from src.auth import create_admin, Admin
     
     admin_id = create_admin(TEST_ADMIN2_EMAIL, TEST_ADMIN2_PASSWORD)
-    return Admin(id=admin_id, email=TEST_ADMIN2_EMAIL, tenant_id=admin_id, is_super=False)
+    return Admin(id=admin_id, email=TEST_ADMIN2_EMAIL, is_super=False)
 
 
 @pytest.fixture
@@ -281,7 +306,7 @@ def second_admin_client(db_module, second_admin):
     """Test client for second admin."""
     from fastapi.testclient import TestClient
     from src.main import app
-    from src.auth import create_session_token, SESSION_COOKIE_NAME
+    from src.auth import create_session_token, ADMIN_SESSION_COOKIE
     
     token = create_session_token(
         admin_id=second_admin.id,
@@ -290,6 +315,6 @@ def second_admin_client(db_module, second_admin):
     )
     
     client = TestClient(app)
-    client.cookies.set(SESSION_COOKIE_NAME, token)
+    client.cookies.set(ADMIN_SESSION_COOKIE, token)
     
     return client

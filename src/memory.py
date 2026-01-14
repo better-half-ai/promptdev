@@ -86,15 +86,16 @@ class UserState(BaseModel):
 # HELPER: tenant_id SQL handling
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def _tenant_clause(tenant_id: Optional[int]) -> tuple[str, list]:
     """
     Return SQL clause and params for tenant filtering.
-    NULL tenant_id = system/test data, use IS NULL check.
+    NULL tenant_id = system/test data.
     """
     if tenant_id is None:
         return "tenant_id IS NULL", []
-    else:
-        return "tenant_id = %s", [tenant_id]
+    return "tenant_id = %s", [tenant_id]
+    return "tenant_id = %s", [tid]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -276,7 +277,6 @@ def set_memory(
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Use COALESCE for unique constraint matching
             cur.execute(
                 """
                 INSERT INTO user_memory (tenant_id, user_id, key, value)

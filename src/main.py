@@ -231,27 +231,27 @@ class AdminCreate(BaseModel):
 # INTERVENTION HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def halt_conversation(user_id: str, operator: str, reason: str) -> None:
+def halt_conversation(user_id: str, operator: str, reason: str, tenant_id: Optional[int] = None) -> None:
     """Halt a user's conversation."""
-    set_user_state(user_id, "halted")
+    set_user_state(user_id, "halted", tenant_id=tenant_id)
     set_memory(user_id, "__halt_metadata", {
         "operator": operator,
         "reason": reason,
         "halted_at": datetime.now(UTC).isoformat()
-    })
+    }, tenant_id=tenant_id)
     logger.info(f"Conversation halted for user {user_id} by {operator}: {reason}")
 
 
-def resume_conversation(user_id: str, operator: str) -> None:
+def resume_conversation(user_id: str, operator: str, tenant_id: Optional[int] = None) -> None:
     """Resume a halted conversation."""
-    set_user_state(user_id, "active")
-    delete_memory(user_id, "__halt_metadata")
+    set_user_state(user_id, "active", tenant_id=tenant_id)
+    delete_memory(user_id, "__halt_metadata", tenant_id=tenant_id)
     logger.info(f"Conversation resumed for user {user_id} by {operator}")
 
 
-def is_conversation_halted(user_id: str) -> bool:
+def is_conversation_halted(user_id: str, tenant_id: Optional[int] = None) -> bool:
     """Check if a conversation is halted."""
-    state = get_user_state(user_id)
+    state = get_user_state(user_id, tenant_id=tenant_id)
     return state is not None and state.mode == "halted"
 
 
@@ -419,7 +419,7 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
         user_id = request.user_id
     
     # Check if halted
-    if is_conversation_halted(user_id):
+    if is_conversation_halted(user_id, tenant_id=tenant_id):
         halt_meta = get_memory(user_id, "__halt_metadata", tenant_id=tenant_id) or {}
         raise HTTPException(
             status_code=423,
@@ -1149,7 +1149,7 @@ async def set_user_memory_endpoint(
     admin: Admin = Depends(get_current_admin)
 ):
     """Set a memory value for a user."""
-    mem_id = set_memory(user_id, key, request.value)
+    mem_id = set_memory(user_id, key, request.value, tenant_id=admin.tenant_id)
     return {"user_id": user_id, "key": key, "memory_id": mem_id}
 
 
@@ -1182,7 +1182,7 @@ async def set_state(
     admin: Admin = Depends(get_current_admin)
 ):
     """Set user state."""
-    set_user_state(user_id, mode)
+    set_user_state(user_id, mode, tenant_id=admin.tenant_id)
     return {"user_id": user_id, "mode": mode}
 
 
@@ -1198,7 +1198,7 @@ async def halt_user_endpoint(
     admin: Admin = Depends(get_current_admin)
 ):
     """Halt a user's conversation."""
-    halt_conversation(user_id, admin.email, request.reason)
+    halt_conversation(user_id, admin.email, request.reason, tenant_id=admin.tenant_id)
     audit_log_from_request(
         admin, req, "user_halt", "user", user_id,
         {"reason": request.reason}
@@ -1213,9 +1213,9 @@ async def resume_user_endpoint(
     admin: Admin = Depends(get_current_admin)
 ):
     """Resume a halted user's conversation."""
-    if not is_conversation_halted(user_id):
+    if not is_conversation_halted(user_id, tenant_id=admin.tenant_id):
         raise HTTPException(status_code=400, detail="Conversation is not halted")
-    resume_conversation(user_id, admin.email)
+    resume_conversation(user_id, admin.email, tenant_id=admin.tenant_id)
     audit_log_from_request(admin, req, "user_resume", "user", user_id)
     return {"status": "resumed", "user_id": user_id}
 

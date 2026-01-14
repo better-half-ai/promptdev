@@ -58,12 +58,11 @@ class GuardrailConfig(BaseModel):
 def _tenant_clause(tenant_id: Optional[int]) -> tuple[str, list]:
     """
     Return SQL clause and params for tenant filtering.
-    NULL tenant_id = system/test data, use IS NULL check.
+    NULL tenant_id = system/test data.
     """
     if tenant_id is None:
         return "tenant_id IS NULL", []
-    else:
-        return "tenant_id = %s", [tenant_id]
+    return "tenant_id = %s", [tenant_id]
 
 
 GUARDRAIL_COLUMNS = "id, name, description, rules, created_at, updated_at, created_by, is_active, tenant_id"
@@ -146,7 +145,7 @@ def get_config(name: str, tenant_id: Optional[int] = None) -> GuardrailConfig:
             row = cur.fetchone()
             
             # Fall back to system config (tenant_id IS NULL)
-            if not row and tenant_id is not None:
+            if not row and tenant_id is not None and tenant_id != 0:
                 cur.execute(
                     f"""
                     SELECT {GUARDRAIL_COLUMNS}
