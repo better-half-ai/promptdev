@@ -54,7 +54,7 @@ class Admin:
     id: int
     email: str
     is_super: bool = False
-    
+
     @property
     def tenant_id(self) -> int:
         return self.id
@@ -74,21 +74,21 @@ class EndUser:
 class AuthContext:
     """
     Unified auth context for all authenticated requests.
-    
+
     Provides tenant_id regardless of whether requester is admin or end user.
     """
     tenant_id: int
     user_type: UserType
     user_id: str  # admin.email or end_user.external_id
-    
+
     # Original objects for detailed access
     admin: Optional[Admin] = None
     end_user: Optional[EndUser] = None
-    
+
     @property
     def is_admin(self) -> bool:
         return self.user_type == UserType.ADMIN
-    
+
     @property
     def is_end_user(self) -> bool:
         return self.user_type == UserType.END_USER
@@ -176,22 +176,22 @@ def authenticate_admin(email: str, password: str) -> Optional[Admin]:
             row = cur.fetchone()
             if not row:
                 return None
-            
+
             admin_id, admin_email, password_hash, is_active, is_super = row
-            
+
             if not is_active:
                 return None
-            
+
             if not verify_password(password, password_hash):
                 return None
-            
+
             # Update last_login
             cur.execute(
                 "UPDATE admins SET last_login = NOW() WHERE id = %s",
                 (admin_id,)
             )
             conn.commit()
-            
+
             return Admin(id=admin_id, email=admin_email, is_super=is_super)
     finally:
         put_conn(conn)
@@ -247,6 +247,23 @@ def list_admins() -> list[dict]:
         put_conn(conn)
 
 
+def get_admin_by_email(email: str) -> Optional[Admin]:
+    """Get admin by email."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, COALESCE(is_super, false) FROM admins WHERE email = %s AND is_active = true",
+                (email,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return Admin(id=row[0], email=row[1], is_super=row[2])
+    finally:
+        put_conn(conn)
+
+
 def update_admin(admin_id: int, is_active: bool = None, password: str = None) -> bool:
     """Update admin."""
     conn = get_conn()
@@ -254,18 +271,18 @@ def update_admin(admin_id: int, is_active: bool = None, password: str = None) ->
         with conn.cursor() as cur:
             updates = []
             params = []
-            
+
             if is_active is not None:
                 updates.append("is_active = %s")
                 params.append(is_active)
-            
+
             if password is not None:
                 updates.append("password_hash = %s")
                 params.append(hash_password(password))
-            
+
             if not updates:
                 return True
-            
+
             params.append(admin_id)
             cur.execute(
                 f"UPDATE admins SET {', '.join(updates)} WHERE id = %s",
@@ -316,7 +333,7 @@ def authenticate_end_user(tenant_id: int, email: str, password: str) -> Optional
             cur.execute(
                 """
                 SELECT id, tenant_id, external_id, email, display_name, password_hash, is_active
-                FROM end_users 
+                FROM end_users
                 WHERE tenant_id = %s AND email = %s
                 """,
                 (tenant_id, email)
@@ -324,22 +341,22 @@ def authenticate_end_user(tenant_id: int, email: str, password: str) -> Optional
             row = cur.fetchone()
             if not row:
                 return None
-            
+
             user_id, tid, external_id, user_email, display_name, password_hash, is_active = row
-            
+
             if not is_active:
                 return None
-            
+
             if not password_hash or not verify_password(password, password_hash):
                 return None
-            
+
             # Update last_seen
             cur.execute(
                 "UPDATE end_users SET last_seen = NOW() WHERE id = %s",
                 (user_id,)
             )
             conn.commit()
-            
+
             return EndUser(
                 id=user_id,
                 tenant_id=tid,
@@ -374,7 +391,7 @@ def create_end_user(
             )
             user_id = cur.fetchone()[0]
             conn.commit()
-            
+
             return EndUser(
                 id=user_id,
                 tenant_id=tenant_id,
@@ -399,7 +416,7 @@ def get_end_user(tenant_id: int, external_id: str) -> Optional[EndUser]:
             cur.execute(
                 """
                 SELECT id, tenant_id, external_id, email, display_name
-                FROM end_users 
+                FROM end_users
                 WHERE tenant_id = %s AND external_id = %s AND is_active = true
                 """,
                 (tenant_id, external_id)
@@ -452,7 +469,7 @@ def list_end_users(tenant_id: int, include_inactive: bool = False) -> list[dict]
             where = "WHERE tenant_id = %s"
             if not include_inactive:
                 where += " AND is_active = true"
-            
+
             cur.execute(
                 f"""
                 SELECT id, external_id, email, display_name, created_at, last_seen, is_active
@@ -491,27 +508,27 @@ def update_end_user(
         with conn.cursor() as cur:
             updates = ["updated_at = NOW()"]
             params = []
-            
+
             if email is not None:
                 updates.append("email = %s")
                 params.append(email)
-            
+
             if password is not None:
                 updates.append("password_hash = %s")
                 params.append(hash_password(password))
-            
+
             if display_name is not None:
                 updates.append("display_name = %s")
                 params.append(display_name)
-            
+
             if is_active is not None:
                 updates.append("is_active = %s")
                 params.append(is_active)
-            
+
             if metadata is not None:
                 updates.append("metadata = %s")
                 params.append(metadata)
-            
+
             params.append(user_id)
             cur.execute(
                 f"UPDATE end_users SET {', '.join(updates)} WHERE id = %s",
@@ -555,7 +572,7 @@ async def get_current_admin(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Cookie"},
         )
-    
+
     admin = verify_admin_session(admin_session)
     if not admin:
         raise HTTPException(
@@ -563,7 +580,7 @@ async def get_current_admin(
             detail="Invalid or expired session",
             headers={"WWW-Authenticate": "Cookie"},
         )
-    
+
     return admin
 
 
@@ -592,7 +609,7 @@ async def get_current_end_user(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Cookie"},
         )
-    
+
     user = verify_user_session(user_session)
     if not user:
         raise HTTPException(
@@ -600,7 +617,7 @@ async def get_current_end_user(
             detail="Invalid or expired session",
             headers={"WWW-Authenticate": "Cookie"},
         )
-    
+
     return user
 
 
@@ -610,9 +627,9 @@ async def get_auth_context(
 ) -> AuthContext:
     """
     FastAPI dependency: accepts either admin or end user session.
-    
+
     Priority: admin > end_user
-    
+
     Returns AuthContext with tenant_id for all DB operations.
     Raises 401 if neither authenticated.
     """
@@ -626,7 +643,7 @@ async def get_auth_context(
                 user_id=admin.email,
                 admin=admin
             )
-    
+
     # Try end user
     if user_session:
         user = verify_user_session(user_session)
@@ -637,7 +654,7 @@ async def get_auth_context(
                 user_id=user.external_id,
                 end_user=user
             )
-    
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
@@ -678,12 +695,12 @@ def audit_log(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO admin_audit_log 
+                INSERT INTO admin_audit_log
                 (admin_id, admin_email, action, resource_type, resource_id, details, ip_address, user_agent)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (admin.id, admin.email, action, resource_type, resource_id, 
+                (admin.id, admin.email, action, resource_type, resource_id,
                  psycopg2.extras.Json(details) if details else None, ip_address, user_agent)
             )
             log_id = cur.fetchone()[0]
