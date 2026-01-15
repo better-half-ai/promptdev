@@ -282,12 +282,12 @@
             <button class="btn btn-danger" onclick="haltConversation()">Halt</button>
         </div>
     </div>
-    
+
     <div id="message-area"></div>
-    
+
     <div class="main">
         <div class="messages" id="messages"></div>
-        
+
         <div class="sidebar">
             <div class="section">
                 <div class="section-title">Context</div>
@@ -302,7 +302,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <div class="section">
                 <div class="section-title">Sentiment Analysis</div>
                 <div class="sentiment-toggle">
@@ -313,13 +313,22 @@
                     </label>
                 </div>
                 <div id="sentiment-stats" style="display: none;">
+                    <div class="section-title" style="margin-top: 10px;">Avg</div>
                     <div class="info-box">
                         <div class="info-row">
-                            <div class="info-label">Avg Valence</div>
+                            <div class="info-label">Valence</div>
                             <div class="info-value" id="avg-valence">-</div>
                         </div>
                         <div class="info-row">
-                            <div class="info-label">Avg Trust</div>
+                            <div class="info-label">Arousal</div>
+                            <div class="info-value" id="avg-arousal">-</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Dominance</div>
+                            <div class="info-value" id="avg-dominance">-</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Trust</div>
                             <div class="info-value" id="avg-trust">-</div>
                         </div>
                         <div class="info-row">
@@ -330,7 +339,7 @@
                     <div class="sentiment-chart" id="sentiment-chart"></div>
                 </div>
             </div>
-            
+
             <div class="section">
                 <div class="section-title">Actions</div>
                 <button class="action-btn primary" onclick="location.reload()">Refresh</button>
@@ -338,7 +347,7 @@
                 <button class="action-btn danger" id="halt-btn" onclick="haltConversation()">Halt Conversation</button>
                 <button class="action-btn primary" id="resume-btn" onclick="resumeConversation()" style="display: none;">Resume Conversation</button>
             </div>
-            
+
             <div class="section" id="inject-form" style="display: none;">
                 <div class="section-title">Inject Message</div>
                 <textarea id="inject-content" placeholder="Message to inject..."></textarea>
@@ -354,12 +363,12 @@
         const userId = urlParams.get('user');
         let currentSessionId = null;
         let sentimentEnabled = false;
-        
+
         if (!userId) {
             alert('No user specified');
             location.href = '/dashboard#monitor';
         }
-        
+
         function goBack() {
             // Go back to Manage view in dashboard
             window.location.href = '/dashboard#monitor';
@@ -379,11 +388,11 @@
             document.getElementById('inject-form').style.display = 'none';
             document.getElementById('inject-content').value = '';
         }
-        
+
         async function toggleSentiment() {
             const toggle = document.getElementById('sentiment-toggle');
             sentimentEnabled = toggle.checked;
-            
+
             if (currentSessionId) {
                 try {
                     await fetch(API + `/admin/sessions/${currentSessionId}/sentiment/toggle?enabled=${sentimentEnabled}`, {
@@ -399,20 +408,22 @@
                 }
             }
         }
-        
+
         async function loadSentimentData() {
             if (!currentSessionId || !sentimentEnabled) return;
-            
+
             try {
                 const res = await fetch(API + `/admin/sessions/${currentSessionId}/sentiment/aggregate`);
                 const data = await res.json();
-                
+
                 if (data.aggregate) {
                     const agg = data.aggregate;
                     document.getElementById('avg-valence').textContent = (agg.avg_valence || 0).toFixed(2);
+                    document.getElementById('avg-arousal').textContent = (agg.avg_arousal || 0).toFixed(2);
+                    document.getElementById('avg-dominance').textContent = (agg.avg_dominance || 0).toFixed(2);
                     document.getElementById('avg-trust').textContent = (agg.avg_trust || 0).toFixed(2);
                     document.getElementById('avg-engagement').textContent = (agg.avg_engagement || 0).toFixed(2);
-                    
+
                     // Load sentiment history for chart
                     const histRes = await fetch(API + `/admin/sessions/${currentSessionId}/sentiment?limit=20`);
                     const histData = await histRes.json();
@@ -422,14 +433,14 @@
                 console.error('Failed to load sentiment:', e);
             }
         }
-        
+
         function renderSentimentChart(sentiments) {
             const chart = document.getElementById('sentiment-chart');
             if (!sentiments.length) {
                 chart.innerHTML = '<div style="color:#666;font-size:0.8em;padding:20px;">No data yet</div>';
                 return;
             }
-            
+
             // Reverse to show oldest first
             const data = sentiments.slice().reverse();
             chart.innerHTML = data.map(s => {
@@ -439,7 +450,7 @@
                 return `<div class="chart-bar" style="height:${height}px;background:${color}" title="Valence: ${valence.toFixed(2)}"></div>`;
             }).join('');
         }
-        
+
         function getSentimentBadge(valence) {
             if (valence > 0.3) return '<span class="sentiment-badge" style="background:#10b981">positive</span>';
             if (valence < -0.3) return '<span class="sentiment-badge" style="background:#ef4444">negative</span>';
@@ -448,16 +459,16 @@
 
         async function loadConversation() {
             document.getElementById('user-id').textContent = userId;
-            
+
             try {
                 const res = await fetch(API + `/admin/conversations/${userId}`);
                 const data = await res.json();
-                
+
                 document.getElementById('message-count').textContent = data.message_count;
                 document.getElementById('total-messages').textContent = data.message_count;
                 document.getElementById('user-state').textContent = data.state || 'active';
                 document.getElementById('state-value').textContent = data.state || 'active';
-                
+
                 // Get session info for sentiment
                 try {
                     const sessRes = await fetch(API + `/admin/sessions?user_id=${userId}`);
@@ -475,7 +486,7 @@
                 } catch (e) {
                     console.error('Failed to load session:', e);
                 }
-                
+
                 const messagesDiv = document.getElementById('messages');
                 messagesDiv.innerHTML = data.messages.map(m => `
                     <div class="message ${m.role}">
@@ -486,9 +497,9 @@
                         </div>
                     </div>
                 `).join('');
-                
+
                 messagesDiv.scrollTop = messagesDiv.scrollHeight;
-                
+
                 // Update button visibility based on state
                 if (data.state === 'halted') {
                     document.getElementById('halt-btn').style.display = 'none';
@@ -505,7 +516,7 @@
         async function haltConversation() {
             const reason = prompt('Reason for halting:');
             if (!reason) return;
-            
+
             try {
                 await fetch(API + `/admin/interventions/${userId}/halt`, {
                     method: 'POST',
@@ -537,7 +548,7 @@
         async function injectMessage() {
             const content = document.getElementById('inject-content').value.trim();
             if (!content) return;
-            
+
             try {
                 await fetch(API + `/admin/interventions/${userId}/inject`, {
                     method: 'POST',

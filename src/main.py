@@ -262,8 +262,8 @@ def get_halted_users() -> list[dict[str, Any]]:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT user_id, mode, updated_at 
-                FROM user_state 
+                SELECT user_id, mode, updated_at
+                FROM user_state
                 WHERE mode = 'halted'
                 ORDER BY updated_at DESC
             """)
@@ -307,9 +307,9 @@ async def admin_login(request: LoginRequest, response: Response, req: Request):
     admin = authenticate(request.email, request.password)
     if not admin:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    
+
     token = create_session_token(admin.id, admin.email, admin.is_super)
-    
+
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -319,9 +319,9 @@ async def admin_login(request: LoginRequest, response: Response, req: Request):
         max_age=SESSION_MAX_AGE,
         path="/",
     )
-    
+
     audit_log_from_request(admin, req, "login")
-    
+
     return {"status": "ok", "email": admin.email, "is_super": admin.is_super}
 
 
@@ -405,28 +405,28 @@ async def delete_admin_endpoint(
 async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_context)):
     """
     Send a chat message.
-    
+
     Accepts admin or end user authentication.
     All data isolated by tenant_id.
-    
+
     For end users, user_id in request is ignored - uses authenticated user's external_id.
     """
     tenant_id = auth.tenant_id
-    
+
     # For end users, override user_id with their external_id
     if auth.is_end_user:
         user_id = auth.user_id
     else:
         user_id = request.user_id
-    
+
     # Get or create session
     session_id = request.session_id
     if session_id is None:
         session_id = get_or_create_session(user_id, tenant_id=tenant_id)
-    
+
     # Get session to check sentiment_enabled
     session = get_session(session_id, tenant_id=tenant_id)
-    
+
     # Check if halted
     if is_conversation_halted(user_id, tenant_id=tenant_id):
         halt_meta = get_memory(user_id, "__halt_metadata", tenant_id=tenant_id) or {}
@@ -435,21 +435,21 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
             detail=f"Conversation halted by {halt_meta.get('operator', 'unknown')}: "
                    f"{halt_meta.get('reason', 'No reason provided')}"
         )
-    
+
     # Determine template
     template_name = request.template_name
     if not template_name:
         template_name = get_default_template_name()
-    
+
     # Check template exists
     try:
         template = get_template_by_name(template_name, tenant_id=tenant_id)
     except TemplateNotFoundError:
         raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-    
+
     if template is None:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
     # Build prompt with context (including sentiment if enabled)
     try:
         prompt = build_prompt_context_simple(
@@ -463,12 +463,12 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
     except Exception as e:
         logger.error(f"Failed to build context: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to build context: {e}")
-    
+
     # Call LLM with timing and telemetry
     start_time = time.time()
     error = None
     llm_response = ""
-    
+
     try:
         llm_response = await call_mistral_simple(prompt=prompt)
     except Exception as e:
@@ -483,7 +483,7 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
             tenant_id=tenant_id
         )
         raise HTTPException(status_code=502, detail=f"LLM call failed: {e}")
-    
+
     response_time_ms = int((time.time() - start_time) * 1000)
     track_llm_request(
         user_id=user_id,
@@ -492,11 +492,11 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
         error=None,
         tenant_id=tenant_id
     )
-    
+
     # Store messages with session
     user_msg_id = add_message(user_id, "user", request.message, tenant_id=tenant_id, session_id=session_id)
     assistant_msg_id = add_message(user_id, "assistant", llm_response, tenant_id=tenant_id, session_id=session_id)
-    
+
     # Analyze sentiment if enabled
     sentiment_data = None
     sentiment_context = None
@@ -505,11 +505,11 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
             # Get the sentiment context that was injected
             from src.sentiment import generate_sentiment_context
             sentiment_context = generate_sentiment_context(session_id)
-            
+
             # Get recent context for sentiment analysis
             recent = get_conversation_history(user_id, limit=5, tenant_id=tenant_id, session_id=session_id)
             context = [{"role": m.role, "content": m.content} for m in reversed(recent)]
-            
+
             # Analyze user message
             affect, confidence = await analyze_message(request.message, context)
             store_sentiment(user_msg_id, affect, confidence, session_id=session_id, injection_context=sentiment_context)
@@ -519,12 +519,12 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
                 "arousal": affect.arousal,
                 "trust": affect.trust,
                 "engagement": affect.engagement,
-                "clarity": affect.clarity,
+                "dominance": affect.dominance,
                 "confidence": confidence
             }
         except Exception as e:
             logger.warning(f"Sentiment analysis failed: {e}")
-    
+
     return ChatResponse(
         response=llm_response,
         metadata={
@@ -547,19 +547,19 @@ async def get_chat_history(
 ):
     """
     Get chat history.
-    
+
     For end users: returns their own history (user_id param ignored).
     For admins: returns history for specified user_id.
     """
     tenant_id = auth.tenant_id
-    
+
     if auth.is_end_user:
         effective_user_id = auth.user_id
     else:
         if not user_id:
             raise HTTPException(status_code=400, detail="user_id required for admin")
         effective_user_id = user_id
-    
+
     messages = get_conversation_history(effective_user_id, limit=limit, offset=offset, tenant_id=tenant_id)
     return {
         "user_id": effective_user_id,
@@ -620,7 +620,7 @@ async def end_user_login(request: EndUserLoginRequest, response: Response):
     user = authenticate_end_user(request.tenant_id, request.email, request.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+
     token = create_user_session(user)
     response.set_cookie(
         key=USER_SESSION_COOKIE,
@@ -631,7 +631,7 @@ async def end_user_login(request: EndUserLoginRequest, response: Response):
         max_age=USER_SESSION_MAX_AGE,
         path="/",
     )
-    
+
     return {
         "status": "ok",
         "user": {
@@ -731,7 +731,7 @@ async def update_tenant_end_user(
     user = get_end_user_by_id(user_id)
     if not user or user.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if not update_end_user(
         user_id,
         email=request.email,
@@ -740,7 +740,7 @@ async def update_tenant_end_user(
         is_active=request.is_active
     ):
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     audit_log_from_request(admin, req, "end_user_update", "end_user", str(user_id))
     return {"status": "updated"}
 
@@ -757,10 +757,10 @@ async def delete_tenant_end_user(
     user = get_end_user_by_id(user_id)
     if not user or user.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if not delete_end_user(user_id, hard=hard):
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     audit_log_from_request(admin, req, "end_user_delete", "end_user", str(user_id))
     return {"status": "deleted" if hard else "deactivated"}
 
@@ -1138,7 +1138,7 @@ async def intervention_inject(
         sessions = list_sessions(user_id, tenant_id=admin.tenant_id)
         if sessions:
             session_id = sessions[0].id
-    
+
     add_message(user_id, "assistant", request.content, tenant_id=admin.tenant_id, session_id=session_id)
     audit_log_from_request(admin, req, "user_inject", "user", user_id, {"message": request.content[:100]})
     return {"status": "injected", "user_id": user_id, "session_id": session_id}
@@ -1551,12 +1551,12 @@ async def update_chat_session(
 ):
     """Update a chat session."""
     tenant_id = auth.tenant_id
-    
+
     # Support both query params (legacy) and JSON body
     final_title = title
     final_is_active = is_active
     metadata = None
-    
+
     if request:
         if request.title is not None:
             final_title = request.title
@@ -1564,7 +1564,7 @@ async def update_chat_session(
             final_is_active = request.is_active
         if request.notes is not None:
             metadata = {"notes": request.notes}
-    
+
     update_session(session_id, tenant_id=tenant_id, title=final_title, is_active=final_is_active, metadata=metadata)
     return {"status": "updated"}
 
@@ -1632,7 +1632,7 @@ async def get_session_messages(
     session = get_session(session_id, tenant_id=tenant_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     messages = get_conversation_history(
         session.user_id, limit=limit, tenant_id=tenant_id, session_id=session_id
     )
@@ -1664,7 +1664,9 @@ async def admin_list_sessions(
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                archived_filter = "" if include_archived else "AND s.archived = false"
+                # Build archived filter
+                archived_filter = "" if include_archived else "AND (s.archived = false OR s.archived IS NULL)"
+
                 # Include sessions where tenant matches OR tenant is NULL
                 cur.execute(
                     f"""
@@ -1685,13 +1687,14 @@ async def admin_list_sessions(
                     ChatSession(
                         id=row[0], user_id=row[1], tenant_id=row[2], title=row[3],
                         created_at=row[4], updated_at=row[5], is_active=row[6],
-                        sentiment_enabled=row[7], archived=row[8], message_count=row[9]
+                        sentiment_enabled=row[7], archived=row[8] if row[8] is not None else False,
+                        message_count=row[9]
                     )
                     for row in rows
                 ]
         finally:
             put_conn(conn)
-    
+
     return {"sessions": [s.model_dump() for s in sessions]}
 
 
@@ -1708,7 +1711,7 @@ async def admin_share_session(
     target = get_admin_by_email(shared_with_email)
     if not target:
         raise HTTPException(status_code=404, detail="Admin not found")
-    
+
     share_id = share_session(session_id, admin.id, target.id, permission)
     return {"share_id": share_id, "shared_with": shared_with_email}
 
@@ -1785,4 +1788,3 @@ async def get_single_message_sentiment(
     if not sentiment:
         raise HTTPException(status_code=404, detail="No sentiment data for this message")
     return sentiment.model_dump()
-

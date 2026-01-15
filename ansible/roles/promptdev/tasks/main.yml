@@ -77,6 +77,14 @@
     group: "{{ app_user }}"
     mode: '0600'
   notify: restart promptdev
+- name: Copy pyproject.toml
+  copy:
+    src: "{{ playbook_dir }}/../pyproject.toml"
+    dest: "{{ app_dir }}/pyproject.toml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+  notify: restart promptdev
 - name: Install uv
   shell: curl -LsSf https://astral.sh/uv/install.sh | sh
   args:

@@ -1,240 +1,189 @@
-# Sentiment & Relational Affect Analysis
+# Sentiment Analysis
 
-This repository provides a standalone sentiment-analysis system.
-
-It includes:
-
-* A RoBERTa-based 3-class sentiment classifier
-* A configurable relational-affect extension producing 5-D emotional vectors
-* Full pytest coverage and human-readable diagnostics
-
----
+PromptDev includes real-time sentiment analysis for chat messages using a 5-dimensional Relational Affect Model.
 
 ## Architecture
 
 ```
-text → SentimentModel (RoBERTa) → label/score
-     → RelationalAffectModel (mapping) → affect_vector[5]
+User Message → Venice.ai LLM → AffectVector[5] → Database → Context Injection
 ```
 
-| Component                 | File                             | Description                                                                    |
-| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------ |
-| **SentimentModel**        | `app/model.py`                   | Wraps `cardiffnlp/twitter-roberta-base-sentiment-latest` for 3-class sentiment |
-| **RelationalAffectModel** | `app/model_relational.py`        | Extends sentiment output to `[hurt, trust, hope, frustration, curiosity]`      |
-| **Tests**                 | `tests/test_model_relational.py` | Validates shape, label consistency, projection math                            |
-| **Configuration**         | `config.toml`                    | Defines model paths, inference parameters, and relational mapping              |
+The system analyzes each user message and:
+1. Extracts 5-dimensional affect vectors
+2. Stores results in `message_sentiment` table
+3. Computes session aggregates
+4. Optionally injects sentiment context into LLM prompts
 
----
+## Affect Dimensions
 
-## Installation
+| Dimension | Range | Description |
+|-----------|-------|-------------|
+| **Valence** | -1 to 1 | Emotional positivity (negative ↔ positive) |
+| **Arousal** | 0 to 1 | Energy level (calm ↔ excited/agitated) |
+| **Dominance** | 0 to 1 | Assertiveness (submissive ↔ dominant) |
+| **Trust** | 0 to 1 | Openness/vulnerability (guarded ↔ trusting) |
+| **Engagement** | 0 to 1 | Investment in conversation (disengaged ↔ engaged) |
+
+### Overall Score
+
+Weighted composite: `valence×0.2 + arousal×0.1 + dominance×0.1 + trust×0.3 + engagement×0.3`
+
+Trust and engagement are weighted higher for relational context.
+
+## Usage
+
+### Enable for a Session
+
+Sentiment analysis is per-session. Enable via admin dashboard or API:
 
 ```bash
-git clone https://github.com/better-half-ai/sentiment-analysis.git
-cd sentiment-analysis
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
+# Toggle sentiment for a session
+curl -X POST "https://your-domain/admin/sessions/{session_id}/sentiment/toggle?enabled=true" \
+  -b cookies.txt
 ```
 
-Requirements: `torch`, `transformers`, `pytest`, `tomli` (Python 3.11+).
-
----
-
-## Models
-
-### Base Sentiment Model
-
-**File:** `app/model.py`
-
-* Uses `cardiffnlp/twitter-roberta-base-sentiment-latest`
-* Classes: negative, neutral, positive
-* Returns confidence-weighted label(s)
+Or when creating a new session:
 
 ```bash
-python -m app.model_relational "I love this!"
+curl -X POST "https://your-domain/chat/sessions?user_id=user123&sentiment_enabled=true" \
+  -b cookies.txt
 ```
 
----
-
-### Relational Affect Model
-
-**File:** `app/model_relational.py`
-
-Extends the base model to five relational dimensions:
-
-```
-[hurt, trust, hope, frustration, curiosity]
-```
-
-It loads the mapping from `config.toml`, multiplies each sentiment confidence by its
-configured relational weights, and returns a structured affect vector.
-
-Example:
+### View Sentiment Data
 
 ```bash
-python -m app.model_relational "I’m disappointed you ignored me"
+# Get sentiment history for a session
+curl "https://your-domain/admin/sessions/{session_id}/sentiment" -b cookies.txt
+
+# Get aggregated sentiment
+curl "https://your-domain/admin/sessions/{session_id}/sentiment/aggregate" -b cookies.txt
+
+# Get sentiment for a specific message
+curl "https://your-domain/admin/messages/{message_id}/sentiment" -b cookies.txt
 ```
 
-Output:
+## Database Schema
+
+### message_sentiment
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | int | Primary key |
+| message_id | int | FK to conversation_history |
+| session_id | int | FK to chat_sessions |
+| valence | float | -1 to 1 |
+| arousal | float | 0 to 1 |
+| dominance | float | 0 to 1 |
+| trust | float | 0 to 1 |
+| engagement | float | 0 to 1 |
+| overall_sentiment | float | Weighted composite |
+| confidence | float | Model confidence (0-1) |
+| injection_context | text | Context string injected into prompt |
+| created_at | timestamp | When analyzed |
+
+### sentiment_aggregates
+
+| Column | Type | Description |
+|--------|------|-------------|
+| session_id | int | FK to chat_sessions |
+| window_type | text | "session", "hourly", etc. |
+| avg_valence | float | Average valence |
+| avg_arousal | float | Average arousal |
+| avg_dominance | float | Average dominance |
+| avg_trust | float | Average trust |
+| avg_engagement | float | Average engagement |
+| valence_trend | float | Linear regression slope |
+| engagement_trend | float | Linear regression slope |
+| message_count | int | Messages in window |
+
+## Context Injection
+
+When sentiment is enabled, recent affect data is summarized and injected into the LLM prompt:
 
 ```
-Base label: negative
-Confidence: 0.88
-Affect vector: [0.79, 0.00, 0.00, 0.62, 0.00]
+[User sentiment: positive and upbeat, highly engaged, open and trusting]
 ```
 
-### Understanding the Affect Vector
+This helps the AI companion respond appropriately to the user's emotional state.
 
-The **affect vector** is a five-number array representing the model’s estimate of how each relational emotion contributes to the overall tone of the input text:
+### Thresholds
 
-| Index | Dimension       | Meaning                                                     |
-| ----- | --------------- | ----------------------------------------------------------- |
-| 0     | **Hurt**        | Emotional pain or disappointment detected in the message.   |
-| 1     | **Trust**       | Degree of perceived confidence, empathy, or safety in tone. |
-| 2     | **Hope**        | Presence of optimism, expectation, or constructive framing. |
-| 3     | **Frustration** | Signs of irritation, blockage, or unmet desire.             |
-| 4     | **Curiosity**   | Indication of openness, inquiry, or cognitive engagement.   |
+| Dimension | Low (<0.3) | Neutral | High (>0.7) |
+|-----------|-----------|---------|-------------|
+| Valence | "frustrated or upset" | - | "positive and upbeat" |
+| Arousal | "calm/subdued" | - | "energetic/excited" |
+| Trust | "guarded" | - | "open and trusting" |
+| Engagement | "disengaged" | - | "highly engaged" |
 
-Each value ranges from 0.0 to 1.0 and is derived by scaling sentiment confidence through the relational mapping in `config.toml`. Higher numbers indicate stronger expression of that emotional dimension.
+## API Endpoints
 
----
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/sessions/{id}/sentiment/toggle` | POST | Enable/disable sentiment |
+| `/admin/sessions/{id}/sentiment` | GET | Get sentiment history |
+| `/admin/sessions/{id}/sentiment/aggregate` | GET | Get aggregated sentiment |
+| `/admin/messages/{id}/sentiment` | GET | Get single message sentiment |
+
+## Implementation Details
+
+### LLM-Based Analysis
+
+Unlike traditional ML sentiment models, PromptDev uses an LLM (Venice.ai) to extract affect dimensions. The prompt asks the model to rate each dimension with JSON output:
+
+```json
+{
+  "valence": 0.6,
+  "arousal": 0.4,
+  "dominance": 0.5,
+  "trust": 0.7,
+  "engagement": 0.8,
+  "confidence": 0.85
+}
+```
+
+### Async Processing
+
+Sentiment analysis runs asynchronously during chat to avoid blocking responses. If analysis fails, the chat continues normally with a warning logged.
+
+### Confidence Scores
+
+The model returns a confidence score (0-1) indicating reliability of the analysis. Low confidence results are still stored but can be filtered in queries.
 
 ## Configuration
 
-**File:** `config.toml`
+Sentiment analysis uses the same Venice.ai configuration as chat:
 
 ```toml
-[model]
-dir = "models/cardiffnlp-roberta-sentiment"
-device = "cpu"
-
-[inference]
-max_length = 128
-batch_size = 8
-
-[relational]
-# rows: negative, neutral, positive
-# columns: hurt, trust, hope, frustration, curiosity
-mapping = [
-  [0.9, 0.0, 0.0, 0.7, 0.0],
-  [0.3, 0.2, 0.2, 0.3, 0.1],
-  [0.0, 0.9, 0.8, 0.0, 0.6],
-]
+[venice]
+url = "https://api.venice.ai/api/v1"
+model = "mistral-31-24b"
 ```
 
-You can tune or retrain this mapping.
-Each row corresponds to a sentiment label; each column defines a relational-affect axis.
-
-To learn the mapping empirically, train a small projection head:
-
-```
-L = MSE(W·p_sentiment, r_target)
-```
-
-Then replace the static numbers with the learned weights in this table.
-
----
-
-## Testing
-
-Run all tests:
-
+Environment variable required:
 ```bash
-pytest -v -s
+VENICE_API_KEY=your_key
 ```
 
-Example output:
+## Admin Dashboard
 
-```
-[INIT] Loaded RelationalAffectModel with mapping:
-tensor([[0.9000, 0.0000, 0.0000, 0.7000, 0.0000],
-        [0.3000, 0.2000, 0.2000, 0.3000, 0.1000],
-        [0.0000, 0.9000, 0.8000, 0.0000, 0.6000]])
+The admin dashboard shows:
+- Per-message sentiment indicators
+- Session aggregate scores (Avg Valence, Avg Trust, Engagement)
+- Sentiment toggle per session
+- Global sentiment toggle in settings
 
-[TEXT] I love talking to you
-[BASE LABEL] positive
-[VECTOR] [0.00, 0.87, 0.78, 0.00, 0.58]
-```
+## Migrations
 
-All tests should pass:
+Required migration: `013_sentiment.sql`
 
-```
-tests/test_model_relational.py::test_predict_relational_shape PASSED
-tests/test_model_relational.py::test_predict_relational_label_consistency PASSED
-tests/test_model_relational.py::test_projection_weighting PASSED
+```sql
+-- Adds sentiment_enabled to chat_sessions
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS sentiment_enabled BOOLEAN DEFAULT true;
+
+-- Creates message_sentiment and sentiment_aggregates tables
 ```
 
----
-
-## Quick Start: Try the Model
-
-You can test the model immediately after installation — no coding required.
-
-**Option 1: Single text input**
-
-Run this command from the project directory:
-
-```
-python -m app.model_relational "I’m excited about this project!"
-```
-
-The program loads the sentiment model, analyzes your text, and prints results like:
-
-```
-Base label: positive
-Confidence: 0.94
-Affect vector: [0.00, 0.85, 0.74, 0.00, 0.55]
-```
-
-You can replace the quoted text with any sentence you want.
-The program exits automatically after displaying the result.
-
----
-
-**Option 2: Run from a JSON file**
-
-1. Create a file named `input.json` containing an array of texts, for example:
-
-   ```json
-   ["I’m happy with how it went.", "This could have gone better.", "Maybe next time."]
-   ```
-
-2. Run:
-
-   ```
-   python -m app.model_relational input.json
-   ```
-
-3. The model will process each entry and display or save results in JSON format:
-
-   ```json
-   [
-     {"text": "I’m happy with how it went.", "label": "positive", "affect_vector": [0.00, 0.84, 0.70, 0.00, 0.50]},
-     {"text": "This could have gone better.", "label": "neutral", "affect_vector": [0.12, 0.08, 0.08, 0.12, 0.04]},
-     {"text": "Maybe next time.", "label": "neutral", "affect_vector": [0.15, 0.10, 0.10, 0.15, 0.05]}
-   ]
-   ```
-
-This allows you to analyze multiple sentences at once and keep the results for later use.
-
----
-
-## Project Structure
-
-```
-sentiment-analysis/
-├── app/
-│   ├── __init__.py
-│   ├── model.py                 # 3-class sentiment model
-│   └── model_relational.py      # relational affect extension
-├── data/
-│   ├── emotions.json
-│   └── groups.json
-├── tests/
-│   ├── test_model_sentiment.py
-│   └── test_model_relational.py
-├── config.toml
-├── README.md
-└── pyproject.toml
+Run with:
+```bash
+make db-migrate db=remote
 ```
