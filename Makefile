@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # Remote VM configuration
-VM_HOST := 94.103.168.100
+VM_HOST := 81.15.150.151
 VM_USER := ubuntu
 VM_KEY := ~/.ssh/fluencevm
 
