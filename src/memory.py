@@ -106,7 +106,8 @@ def add_message(
     user_id: str,
     role: str,
     content: str,
-    tenant_id: Optional[int] = None
+    tenant_id: Optional[int] = None,
+    session_id: Optional[int] = None
 ) -> int:
     """Add a message to conversation history."""
     if role not in ("user", "assistant"):
@@ -117,13 +118,21 @@ def add_message(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO conversation_history (tenant_id, user_id, role, content)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO conversation_history (tenant_id, user_id, role, content, session_id)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (tenant_id, user_id, role, content)
+                (tenant_id, user_id, role, content, session_id)
             )
             message_id = cur.fetchone()[0]
+            
+            # Update session timestamp if session_id provided
+            if session_id:
+                cur.execute(
+                    "UPDATE chat_sessions SET updated_at = NOW() WHERE id = %s",
+                    (session_id,)
+                )
+            
             conn.commit()
             return message_id
     except Exception as e:
@@ -137,20 +146,29 @@ def get_conversation_history(
     user_id: str,
     limit: Optional[int] = None,
     offset: int = 0,
-    tenant_id: Optional[int] = None
+    tenant_id: Optional[int] = None,
+    session_id: Optional[int] = None
 ) -> list[ConversationMessage]:
     """Get conversation history for a user (newest first)."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            
+            # Filter by session if provided
+            session_filter = ""
+            if session_id is not None:
+                session_filter = "AND session_id = %s"
+            
             query = f"""
                 SELECT id, user_id, role, content, created_at
                 FROM conversation_history
-                WHERE {tenant_clause} AND user_id = %s
+                WHERE {tenant_clause} AND user_id = %s {session_filter}
                 ORDER BY created_at DESC
             """
             params = tenant_params + [user_id]
+            if session_id is not None:
+                params.append(session_id)
             
             if limit is not None:
                 query += " LIMIT %s"
@@ -580,3 +598,311 @@ def list_halted_users(tenant_id: Optional[int] = None) -> list[dict]:
             ]
     finally:
         put_conn(conn)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAT SESSIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ChatSession(BaseModel):
+    """A chat session."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    user_id: str
+    tenant_id: Optional[int] = None
+    title: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool = True
+    archived: bool = False
+    sentiment_enabled: bool = False
+    message_count: int = 0
+
+
+def create_session(
+    user_id: str,
+    tenant_id: Optional[int] = None,
+    title: Optional[str] = None,
+    sentiment_enabled: bool = False
+) -> int:
+    """Create a new chat session."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Auto-generate title if not provided
+            if not title:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM chat_sessions 
+                    WHERE user_id = %s AND (tenant_id = %s OR (tenant_id IS NULL AND %s IS NULL))
+                    """,
+                    (user_id, tenant_id, tenant_id)
+                )
+                count = cur.fetchone()[0]
+                title = f"Chat {count + 1}"
+            
+            cur.execute(
+                """
+                INSERT INTO chat_sessions (tenant_id, user_id, title, sentiment_enabled)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (tenant_id, user_id, title, sentiment_enabled)
+            )
+            session_id = cur.fetchone()[0]
+            conn.commit()
+            return session_id
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to create session: {e}")
+    finally:
+        put_conn(conn)
+
+
+def get_session(session_id: int, tenant_id: Optional[int] = None) -> Optional[ChatSession]:
+    """Get a chat session by ID."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            cur.execute(
+                f"""
+                SELECT s.id, s.user_id, s.tenant_id, s.title, s.created_at, s.updated_at, 
+                       s.is_active, s.sentiment_enabled,
+                       (SELECT COUNT(*) FROM conversation_history WHERE session_id = s.id) as message_count
+                FROM chat_sessions s
+                WHERE s.id = %s AND ({tenant_clause} OR s.tenant_id IS NULL)
+                """,
+                [session_id] + tenant_params
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return ChatSession(
+                id=row[0], user_id=row[1], tenant_id=row[2], title=row[3],
+                created_at=row[4], updated_at=row[5], is_active=row[6],
+                sentiment_enabled=row[7], message_count=row[8]
+            )
+    finally:
+        put_conn(conn)
+
+
+def list_sessions(
+    user_id: str,
+    tenant_id: Optional[int] = None,
+    include_inactive: bool = False
+) -> list[ChatSession]:
+    """List all chat sessions for a user."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            active_filter = "" if include_inactive else "AND s.is_active = true AND s.archived = false"
+            cur.execute(
+                f"""
+                SELECT s.id, s.user_id, s.tenant_id, s.title, s.created_at, s.updated_at,
+                       s.is_active, s.sentiment_enabled, s.archived,
+                       (SELECT COUNT(*) FROM conversation_history WHERE session_id = s.id) as message_count
+                FROM chat_sessions s
+                WHERE s.user_id = %s AND {tenant_clause} {active_filter}
+                ORDER BY s.updated_at DESC
+                """,
+                [user_id] + tenant_params
+            )
+            return [
+                ChatSession(
+                    id=row[0], user_id=row[1], tenant_id=row[2], title=row[3],
+                    created_at=row[4], updated_at=row[5], is_active=row[6],
+                    sentiment_enabled=row[7], archived=row[8], message_count=row[9]
+                )
+                for row in cur.fetchall()
+            ]
+    finally:
+        put_conn(conn)
+
+
+def update_session(
+    session_id: int,
+    tenant_id: Optional[int] = None,
+    title: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    sentiment_enabled: Optional[bool] = None,
+    archived: Optional[bool] = None,
+    metadata: Optional[dict] = None
+) -> None:
+    """Update a chat session."""
+    updates = []
+    params = []
+    
+    if title is not None:
+        updates.append("title = %s")
+        params.append(title)
+    if is_active is not None:
+        updates.append("is_active = %s")
+        params.append(is_active)
+    if sentiment_enabled is not None:
+        updates.append("sentiment_enabled = %s")
+        params.append(sentiment_enabled)
+    if archived is not None:
+        updates.append("archived = %s")
+        params.append(archived)
+    if metadata is not None:
+        updates.append("metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb")
+        params.append(Json(metadata))
+    
+    if not updates:
+        return
+    
+    updates.append("updated_at = NOW()")
+    
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            cur.execute(
+                f"""
+                UPDATE chat_sessions 
+                SET {', '.join(updates)}
+                WHERE id = %s AND {tenant_clause}
+                """,
+                params + [session_id] + tenant_params
+            )
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to update session: {e}")
+    finally:
+        put_conn(conn)
+
+
+def delete_session(session_id: int, tenant_id: Optional[int] = None, soft: bool = True) -> None:
+    """Delete a chat session (soft delete by default)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            if soft:
+                cur.execute(
+                    f"UPDATE chat_sessions SET is_active = false, updated_at = NOW() WHERE id = %s AND {tenant_clause}",
+                    [session_id] + tenant_params
+                )
+            else:
+                cur.execute(
+                    f"DELETE FROM chat_sessions WHERE id = %s AND {tenant_clause}",
+                    [session_id] + tenant_params
+                )
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to delete session: {e}")
+    finally:
+        put_conn(conn)
+
+
+def get_or_create_session(user_id: str, tenant_id: Optional[int] = None) -> int:
+    """Get the most recent active session for a user, or create one."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            tenant_clause, tenant_params = _tenant_clause(tenant_id)
+            cur.execute(
+                f"""
+                SELECT id FROM chat_sessions 
+                WHERE user_id = %s AND {tenant_clause} AND is_active = true
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                [user_id] + tenant_params
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+    finally:
+        put_conn(conn)
+    
+    # No active session, create one
+    return create_session(user_id, tenant_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAT SHARING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def share_session(
+    session_id: int,
+    shared_by: int,
+    shared_with: int,
+    permission: str = "read"
+) -> int:
+    """Share a chat session with another admin."""
+    if permission not in ("read", "write", "admin"):
+        raise MemoryError(f"Invalid permission: {permission}")
+    
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_shares (session_id, shared_by, shared_with, permission)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (session_id, shared_with) 
+                DO UPDATE SET permission = EXCLUDED.permission
+                RETURNING id
+                """,
+                (session_id, shared_by, shared_with, permission)
+            )
+            share_id = cur.fetchone()[0]
+            conn.commit()
+            return share_id
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to share session: {e}")
+    finally:
+        put_conn(conn)
+
+
+def unshare_session(session_id: int, shared_with: int) -> None:
+    """Remove sharing for a session."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM chat_shares WHERE session_id = %s AND shared_with = %s",
+                (session_id, shared_with)
+            )
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise MemoryError(f"Failed to unshare session: {e}")
+    finally:
+        put_conn(conn)
+
+
+def list_shared_sessions(admin_id: int) -> list[ChatSession]:
+    """List sessions shared with an admin."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.id, s.user_id, s.tenant_id, s.title, s.created_at, s.updated_at,
+                       s.is_active, s.sentiment_enabled,
+                       (SELECT COUNT(*) FROM conversation_history WHERE session_id = s.id) as message_count
+                FROM chat_sessions s
+                JOIN chat_shares cs ON cs.session_id = s.id
+                WHERE cs.shared_with = %s AND s.is_active = true
+                ORDER BY s.updated_at DESC
+                """,
+                (admin_id,)
+            )
+            return [
+                ChatSession(
+                    id=row[0], user_id=row[1], tenant_id=row[2], title=row[3],
+                    created_at=row[4], updated_at=row[5], is_active=row[6],
+                    sentiment_enabled=row[7], message_count=row[8]
+                )
+                for row in cur.fetchall()
+            ]
+    finally:
+        put_conn(conn)
+

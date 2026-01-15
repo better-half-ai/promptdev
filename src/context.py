@@ -198,16 +198,41 @@ def build_prompt_context_simple(
     template_name: str,
     user_message: str,
     guardrail_config: Optional[str] = None,
-    tenant_id: Optional[int] = None
+    tenant_id: Optional[int] = None,
+    session_id: Optional[int] = None
 ) -> str:
     """Simplified context builder for immediate user message."""
-    return build_prompt_context(
+    additional_vars = {"current_message": user_message}
+    
+    # Build base prompt
+    rendered = build_prompt_context(
         user_id,
         template_name,
-        additional_variables={"current_message": user_message},
+        additional_variables=additional_vars,
         guardrail_config=guardrail_config,
         tenant_id=tenant_id
     )
+    
+    # Auto-inject sentiment context if session_id provided (regardless of template)
+    if session_id is not None:
+        try:
+            from src.sentiment import generate_sentiment_context
+            sentiment_ctx = generate_sentiment_context(session_id)
+            if sentiment_ctx:
+                # Inject after system prompt, before user message
+                # Find the user message marker and insert before it
+                if "<|im_start|>user" in rendered:
+                    rendered = rendered.replace(
+                        "<|im_start|>user",
+                        f"{sentiment_ctx}\n<|im_start|>user"
+                    )
+                else:
+                    # Fallback: prepend to prompt
+                    rendered = f"{sentiment_ctx}\n{rendered}"
+        except Exception as e:
+            logger.warning(f"Failed to inject sentiment context: {e}")
+    
+    return rendered
 
 
 # ═══════════════════════════════════════════════════════════════════════════

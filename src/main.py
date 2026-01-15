@@ -173,6 +173,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     template_name: Optional[str] = None
     guardrail_config: Optional[str] = None
+    session_id: Optional[int] = None  # If None, uses/creates default session
 
 
 class ChatResponse(BaseModel):
@@ -418,6 +419,14 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
     else:
         user_id = request.user_id
     
+    # Get or create session
+    session_id = request.session_id
+    if session_id is None:
+        session_id = get_or_create_session(user_id, tenant_id=tenant_id)
+    
+    # Get session to check sentiment_enabled
+    session = get_session(session_id, tenant_id=tenant_id)
+    
     # Check if halted
     if is_conversation_halted(user_id, tenant_id=tenant_id):
         halt_meta = get_memory(user_id, "__halt_metadata", tenant_id=tenant_id) or {}
@@ -441,14 +450,15 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
     if template is None:
         raise HTTPException(status_code=404, detail="Template not found")
     
-    # Build prompt with context
+    # Build prompt with context (including sentiment if enabled)
     try:
         prompt = build_prompt_context_simple(
             user_id,
             template_name,
             request.message,
             guardrail_config=request.guardrail_config,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            session_id=session_id if (session and session.sentiment_enabled) else None
         )
     except Exception as e:
         logger.error(f"Failed to build context: {e}")
@@ -483,16 +493,47 @@ async def chat(request: ChatRequest, auth: AuthContext = Depends(get_auth_contex
         tenant_id=tenant_id
     )
     
-    # Store messages
-    add_message(user_id, "user", request.message, tenant_id=tenant_id)
-    add_message(user_id, "assistant", llm_response, tenant_id=tenant_id)
+    # Store messages with session
+    user_msg_id = add_message(user_id, "user", request.message, tenant_id=tenant_id, session_id=session_id)
+    assistant_msg_id = add_message(user_id, "assistant", llm_response, tenant_id=tenant_id, session_id=session_id)
+    
+    # Analyze sentiment if enabled
+    sentiment_data = None
+    sentiment_context = None
+    if session and session.sentiment_enabled:
+        try:
+            # Get the sentiment context that was injected
+            from src.sentiment import generate_sentiment_context
+            sentiment_context = generate_sentiment_context(session_id)
+            
+            # Get recent context for sentiment analysis
+            recent = get_conversation_history(user_id, limit=5, tenant_id=tenant_id, session_id=session_id)
+            context = [{"role": m.role, "content": m.content} for m in reversed(recent)]
+            
+            # Analyze user message
+            affect, confidence = await analyze_message(request.message, context)
+            store_sentiment(user_msg_id, affect, confidence, session_id=session_id, injection_context=sentiment_context)
+            sentiment_data = {
+                "message_id": user_msg_id,
+                "valence": affect.valence,
+                "arousal": affect.arousal,
+                "trust": affect.trust,
+                "engagement": affect.engagement,
+                "clarity": affect.clarity,
+                "confidence": confidence
+            }
+        except Exception as e:
+            logger.warning(f"Sentiment analysis failed: {e}")
     
     return ChatResponse(
         response=llm_response,
         metadata={
             "template_used": template_name,
             "message_count": count_messages(user_id, tenant_id=tenant_id),
-            "response_time_ms": response_time_ms
+            "response_time_ms": response_time_ms,
+            "session_id": session_id,
+            "sentiment": sentiment_data,
+            "sentiment_context": sentiment_context
         }
     )
 
@@ -1088,12 +1129,19 @@ async def intervention_inject(
     user_id: str,
     request: InjectRequest,
     req: Request,
+    session_id: Optional[int] = Query(None),
     admin: Admin = Depends(get_current_admin)
 ):
     """Inject a message into a user's conversation (used by monitor.html)."""
-    add_message(user_id, "assistant", request.message, tenant_id=admin.tenant_id)
-    audit_log_from_request(admin, req, "user_inject", "user", user_id, {"message": request.message[:100]})
-    return {"status": "injected", "user_id": user_id}
+    # If no session_id provided, try to get the most recent active session for this user
+    if session_id is None:
+        sessions = list_sessions(user_id, tenant_id=admin.tenant_id)
+        if sessions:
+            session_id = sessions[0].id
+    
+    add_message(user_id, "assistant", request.content, tenant_id=admin.tenant_id, session_id=session_id)
+    audit_log_from_request(admin, req, "user_inject", "user", user_id, {"message": request.content[:100]})
+    return {"status": "injected", "user_id": user_id, "session_id": session_id}
 
 
 @app.get("/admin/users/{user_id}/conversations")
@@ -1394,7 +1442,7 @@ async def delete_guardrail_endpoint(
 async def get_stats_overview(admin: Admin = Depends(get_current_admin)):
     """Get aggregated dashboard statistics."""
     try:
-        stats = get_dashboard_stats()
+        stats = get_dashboard_stats(tenant_id=admin.tenant_id)
         return {
             "active_users_today": stats.active_users_today,
             "active_users_hour": getattr(stats, 'active_users_hour', 0),
@@ -1437,3 +1485,304 @@ async def trigger_aggregation(admin: Admin = Depends(get_current_admin)):
         return {"status": "success", "message": "Metrics aggregated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Aggregation failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAT SESSIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+from src.memory import (
+    create_session, get_session, list_sessions, update_session, delete_session,
+    get_or_create_session, share_session, unshare_session, list_shared_sessions,
+    ChatSession
+)
+
+
+@app.get("/chat/sessions")
+async def list_user_sessions(
+    user_id: str = Query(...),
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """List all chat sessions for a user."""
+    tenant_id = auth.tenant_id
+    sessions = list_sessions(user_id, tenant_id=tenant_id)
+    return {"sessions": [s.model_dump() for s in sessions]}
+
+
+@app.post("/chat/sessions")
+async def create_user_session(
+    user_id: str = Query(...),
+    title: Optional[str] = Query(None),
+    sentiment_enabled: bool = Query(False),
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Create a new chat session."""
+    tenant_id = auth.tenant_id
+    session_id = create_session(user_id, tenant_id=tenant_id, title=title, sentiment_enabled=sentiment_enabled)
+    return {"session_id": session_id, "sentiment_enabled": sentiment_enabled}
+
+
+@app.get("/chat/sessions/{session_id}")
+async def get_chat_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Get a specific chat session."""
+    tenant_id = auth.tenant_id
+    session = get_session(session_id, tenant_id=tenant_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.model_dump()
+
+
+class SessionUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.put("/chat/sessions/{session_id}")
+async def update_chat_session(
+    session_id: int,
+    request: Optional[SessionUpdateRequest] = None,
+    title: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Update a chat session."""
+    tenant_id = auth.tenant_id
+    
+    # Support both query params (legacy) and JSON body
+    final_title = title
+    final_is_active = is_active
+    metadata = None
+    
+    if request:
+        if request.title is not None:
+            final_title = request.title
+        if request.is_active is not None:
+            final_is_active = request.is_active
+        if request.notes is not None:
+            metadata = {"notes": request.notes}
+    
+    update_session(session_id, tenant_id=tenant_id, title=final_title, is_active=final_is_active, metadata=metadata)
+    return {"status": "updated"}
+
+
+@app.post("/chat/sessions/{session_id}/archive")
+async def archive_chat_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Archive a chat session."""
+    update_session(session_id, tenant_id=auth.tenant_id, archived=True)
+    return {"status": "archived", "session_id": session_id}
+
+
+@app.post("/chat/sessions/{session_id}/unarchive")
+async def unarchive_chat_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Unarchive a chat session."""
+    update_session(session_id, tenant_id=auth.tenant_id, archived=False)
+    return {"status": "unarchived", "session_id": session_id}
+
+
+@app.post("/chat/sessions/{session_id}/deactivate")
+async def deactivate_chat_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Deactivate a chat session (stops accepting messages)."""
+    update_session(session_id, tenant_id=auth.tenant_id, is_active=False)
+    return {"status": "deactivated", "session_id": session_id}
+
+
+@app.post("/chat/sessions/{session_id}/activate")
+async def activate_chat_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Reactivate a chat session."""
+    update_session(session_id, tenant_id=auth.tenant_id, is_active=True)
+    return {"status": "activated", "session_id": session_id}
+
+
+@app.delete("/chat/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: int,
+    hard: bool = Query(False),
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Delete a chat session (soft delete by default)."""
+    tenant_id = auth.tenant_id
+    delete_session(session_id, tenant_id=tenant_id, soft=not hard)
+    return {"status": "deleted"}
+
+
+@app.get("/chat/sessions/{session_id}/messages")
+async def get_session_messages(
+    session_id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    auth: AuthContext = Depends(get_auth_context)
+):
+    """Get messages for a specific session."""
+    tenant_id = auth.tenant_id
+    session = get_session(session_id, tenant_id=tenant_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    messages = get_conversation_history(
+        session.user_id, limit=limit, tenant_id=tenant_id, session_id=session_id
+    )
+    return {
+        "session": session.model_dump(),
+        "messages": [
+            {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+            for m in reversed(messages)
+        ]
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADMIN: CHAT SESSION MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/admin/sessions")
+async def admin_list_sessions(
+    user_id: Optional[str] = Query(None),
+    include_archived: bool = Query(False),
+    admin: Admin = Depends(get_current_admin)
+):
+    """List sessions (optionally filtered by user)."""
+    if user_id:
+        sessions = list_sessions(user_id, tenant_id=admin.tenant_id, include_inactive=include_archived)
+    else:
+        # List all sessions for tenant
+        from db.db import get_conn, put_conn
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                archived_filter = "" if include_archived else "AND s.archived = false"
+                # Include sessions where tenant matches OR tenant is NULL
+                cur.execute(
+                    f"""
+                    SELECT s.id, s.user_id, s.tenant_id, s.title, s.created_at, s.updated_at,
+                           s.is_active, s.sentiment_enabled, s.archived,
+                           (SELECT COUNT(*) FROM conversation_history WHERE session_id = s.id) as msg_count
+                    FROM chat_sessions s
+                    WHERE s.is_active = true {archived_filter}
+                      AND (s.tenant_id = %s OR s.tenant_id IS NULL OR %s IS NULL)
+                    ORDER BY s.updated_at DESC
+                    LIMIT 100
+                    """,
+                    (admin.tenant_id, admin.tenant_id)
+                )
+                rows = cur.fetchall()
+                logger.info(f"Found {len(rows)} sessions for tenant {admin.tenant_id}")
+                sessions = [
+                    ChatSession(
+                        id=row[0], user_id=row[1], tenant_id=row[2], title=row[3],
+                        created_at=row[4], updated_at=row[5], is_active=row[6],
+                        sentiment_enabled=row[7], archived=row[8], message_count=row[9]
+                    )
+                    for row in rows
+                ]
+        finally:
+            put_conn(conn)
+    
+    return {"sessions": [s.model_dump() for s in sessions]}
+
+
+@app.post("/admin/sessions/{session_id}/share")
+async def admin_share_session(
+    session_id: int,
+    shared_with_email: str = Query(...),
+    permission: str = Query("read"),
+    admin: Admin = Depends(get_current_admin)
+):
+    """Share a session with another admin."""
+    # Look up target admin by email
+    from src.auth import get_admin_by_email
+    target = get_admin_by_email(shared_with_email)
+    if not target:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    
+    share_id = share_session(session_id, admin.id, target.id, permission)
+    return {"share_id": share_id, "shared_with": shared_with_email}
+
+
+@app.delete("/admin/sessions/{session_id}/share/{admin_id}")
+async def admin_unshare_session(
+    session_id: int,
+    admin_id: int,
+    admin: Admin = Depends(get_current_admin)
+):
+    """Remove sharing for a session."""
+    unshare_session(session_id, admin_id)
+    return {"status": "unshared"}
+
+
+@app.get("/admin/sessions/shared")
+async def admin_list_shared_sessions(admin: Admin = Depends(get_current_admin)):
+    """List sessions shared with current admin."""
+    sessions = list_shared_sessions(admin.id)
+    return {"sessions": [s.model_dump() for s in sessions]}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SENTIMENT ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+
+from src.sentiment import (
+    analyze_message, store_sentiment, get_message_sentiment, get_session_sentiment,
+    compute_session_aggregate, AffectVector
+)
+
+
+@app.post("/admin/sessions/{session_id}/sentiment/toggle")
+async def toggle_sentiment(
+    session_id: int,
+    enabled: bool = Query(...),
+    admin: Admin = Depends(get_current_admin)
+):
+    """Enable/disable sentiment analysis for a session."""
+    update_session(session_id, tenant_id=admin.tenant_id, sentiment_enabled=enabled)
+    return {"session_id": session_id, "sentiment_enabled": enabled}
+
+
+@app.get("/admin/sessions/{session_id}/sentiment")
+async def get_sentiment_history(
+    session_id: int,
+    limit: int = Query(50),
+    admin: Admin = Depends(get_current_admin)
+):
+    """Get sentiment history for a session."""
+    sentiments = get_session_sentiment(session_id, limit=limit)
+    return {"sentiments": sentiments}
+
+
+@app.get("/admin/sessions/{session_id}/sentiment/aggregate")
+async def get_sentiment_aggregate(
+    session_id: int,
+    admin: Admin = Depends(get_current_admin)
+):
+    """Get aggregated sentiment for a session."""
+    agg = compute_session_aggregate(session_id)
+    if not agg:
+        return {"aggregate": None}
+    return {"aggregate": agg.model_dump()}
+
+
+@app.get("/admin/messages/{message_id}/sentiment")
+async def get_single_message_sentiment(
+    message_id: int,
+    admin: Admin = Depends(get_current_admin)
+):
+    """Get sentiment for a specific message."""
+    sentiment = get_message_sentiment(message_id)
+    if not sentiment:
+        raise HTTPException(status_code=404, detail="No sentiment data for this message")
+    return sentiment.model_dump()
+

@@ -191,7 +191,7 @@ def db_module(postgres_container, test_db, llm_url):
     src.config._config = test_config
 
     # Clean all tables before each test
-    preserve_tables = {'schema_migrations', 'guardrail_configs'}
+    preserve_tables = {'schema_migrations', 'guardrail_configs', 'chat_sessions', 'chat_shares', 'message_sentiment', 'sentiment_aggregates'}
     
     conn = psycopg2.connect(
         host=os.environ["TEST_DB_HOST"],

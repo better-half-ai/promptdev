@@ -499,6 +499,38 @@ def render_template_by_name(
     return _render_content(template.content, variables)
 
 
+def render_with_sentiment(
+    name: str,
+    variables: Optional[dict[str, Any]] = None,
+    tenant_id: Optional[int] = None,
+    session_id: Optional[int] = None
+) -> str:
+    """
+    Render a template with automatic sentiment context injection.
+    
+    If session_id is provided and sentiment is enabled, adds {{sentiment_context}}
+    variable with recent emotional state summary.
+    """
+    if variables is None:
+        variables = {}
+    
+    # Add sentiment context if session provided
+    if session_id is not None:
+        try:
+            from src.sentiment import generate_sentiment_context
+            sentiment_ctx = generate_sentiment_context(session_id)
+            if sentiment_ctx:
+                variables["sentiment_context"] = sentiment_ctx
+        except Exception as e:
+            logger.warning(f"Failed to generate sentiment context: {e}")
+            variables["sentiment_context"] = ""
+    else:
+        variables["sentiment_context"] = ""
+    
+    template = get_template_by_name(name, tenant_id)
+    return _render_content(template.content, variables)
+
+
 def _render_content(content: str, variables: Optional[dict[str, Any]] = None) -> str:
     """Internal: render template content with variables."""
     from jinja2 import StrictUndefined

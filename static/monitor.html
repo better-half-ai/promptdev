@@ -185,6 +185,88 @@
         .error {
             background: #dc3545;
         }
+        /* Sentiment styles */
+        .sentiment-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #2a2a2a;
+            transition: .3s;
+            border-radius: 26px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #667eea;
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        .sentiment-bar {
+            height: 4px;
+            background: #2a2a2a;
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        .sentiment-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+        .sentiment-positive { background: linear-gradient(90deg, #10b981, #34d399); }
+        .sentiment-negative { background: linear-gradient(90deg, #ef4444, #f87171); }
+        .sentiment-neutral { background: linear-gradient(90deg, #6b7280, #9ca3af); }
+        .sentiment-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75em;
+            margin-left: 8px;
+        }
+        .sentiment-chart {
+            height: 60px;
+            background: #0a0a0a;
+            border-radius: 6px;
+            margin-top: 10px;
+            display: flex;
+            align-items: flex-end;
+            padding: 4px;
+            gap: 2px;
+        }
+        .chart-bar {
+            flex: 1;
+            min-width: 4px;
+            border-radius: 2px 2px 0 0;
+        }
     </style>
 </head>
 <body>
@@ -195,7 +277,7 @@
             <div class="stat">State: <span id="user-state">active</span></div>
         </div>
         <div class="controls">
-            <button class="btn btn-secondary" onclick="history.back()">Back</button>
+            <button class="btn btn-secondary" onclick="goBack()">Back</button>
             <button class="btn btn-secondary" onclick="exportConversation()">Export</button>
             <button class="btn btn-danger" onclick="haltConversation()">Halt</button>
         </div>
@@ -222,6 +304,34 @@
             </div>
             
             <div class="section">
+                <div class="section-title">Sentiment Analysis</div>
+                <div class="sentiment-toggle">
+                    <span>Sentiment Analysis</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="sentiment-toggle" onchange="toggleSentiment()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div id="sentiment-stats" style="display: none;">
+                    <div class="info-box">
+                        <div class="info-row">
+                            <div class="info-label">Avg Valence</div>
+                            <div class="info-value" id="avg-valence">-</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Avg Trust</div>
+                            <div class="info-value" id="avg-trust">-</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Engagement</div>
+                            <div class="info-value" id="avg-engagement">-</div>
+                        </div>
+                    </div>
+                    <div class="sentiment-chart" id="sentiment-chart"></div>
+                </div>
+            </div>
+            
+            <div class="section">
                 <div class="section-title">Actions</div>
                 <button class="action-btn primary" onclick="location.reload()">Refresh</button>
                 <button class="action-btn" onclick="showInjectForm()">Inject Message</button>
@@ -242,10 +352,17 @@
         const API = '';
         const urlParams = new URLSearchParams(window.location.search);
         const userId = urlParams.get('user');
+        let currentSessionId = null;
+        let sentimentEnabled = false;
         
         if (!userId) {
             alert('No user specified');
-            location.href = 'dashboard.html';
+            location.href = '/dashboard#monitor';
+        }
+        
+        function goBack() {
+            // Go back to Manage view in dashboard
+            window.location.href = '/dashboard#monitor';
         }
 
         function showMessage(text, isError = false) {
@@ -262,6 +379,72 @@
             document.getElementById('inject-form').style.display = 'none';
             document.getElementById('inject-content').value = '';
         }
+        
+        async function toggleSentiment() {
+            const toggle = document.getElementById('sentiment-toggle');
+            sentimentEnabled = toggle.checked;
+            
+            if (currentSessionId) {
+                try {
+                    await fetch(API + `/admin/sessions/${currentSessionId}/sentiment/toggle?enabled=${sentimentEnabled}`, {
+                        method: 'POST'
+                    });
+                    document.getElementById('sentiment-stats').style.display = sentimentEnabled ? 'block' : 'none';
+                    if (sentimentEnabled) {
+                        loadSentimentData();
+                    }
+                } catch (e) {
+                    showMessage('Failed to toggle sentiment: ' + e.message, true);
+                    toggle.checked = !sentimentEnabled;
+                }
+            }
+        }
+        
+        async function loadSentimentData() {
+            if (!currentSessionId || !sentimentEnabled) return;
+            
+            try {
+                const res = await fetch(API + `/admin/sessions/${currentSessionId}/sentiment/aggregate`);
+                const data = await res.json();
+                
+                if (data.aggregate) {
+                    const agg = data.aggregate;
+                    document.getElementById('avg-valence').textContent = (agg.avg_valence || 0).toFixed(2);
+                    document.getElementById('avg-trust').textContent = (agg.avg_trust || 0).toFixed(2);
+                    document.getElementById('avg-engagement').textContent = (agg.avg_engagement || 0).toFixed(2);
+                    
+                    // Load sentiment history for chart
+                    const histRes = await fetch(API + `/admin/sessions/${currentSessionId}/sentiment?limit=20`);
+                    const histData = await histRes.json();
+                    renderSentimentChart(histData.sentiments || []);
+                }
+            } catch (e) {
+                console.error('Failed to load sentiment:', e);
+            }
+        }
+        
+        function renderSentimentChart(sentiments) {
+            const chart = document.getElementById('sentiment-chart');
+            if (!sentiments.length) {
+                chart.innerHTML = '<div style="color:#666;font-size:0.8em;padding:20px;">No data yet</div>';
+                return;
+            }
+            
+            // Reverse to show oldest first
+            const data = sentiments.slice().reverse();
+            chart.innerHTML = data.map(s => {
+                const valence = s.valence || 0;
+                const height = Math.abs(valence) * 50 + 10;
+                const color = valence > 0.1 ? '#10b981' : valence < -0.1 ? '#ef4444' : '#6b7280';
+                return `<div class="chart-bar" style="height:${height}px;background:${color}" title="Valence: ${valence.toFixed(2)}"></div>`;
+            }).join('');
+        }
+        
+        function getSentimentBadge(valence) {
+            if (valence > 0.3) return '<span class="sentiment-badge" style="background:#10b981">positive</span>';
+            if (valence < -0.3) return '<span class="sentiment-badge" style="background:#ef4444">negative</span>';
+            return '';
+        }
 
         async function loadConversation() {
             document.getElementById('user-id').textContent = userId;
@@ -274,6 +457,24 @@
                 document.getElementById('total-messages').textContent = data.message_count;
                 document.getElementById('user-state').textContent = data.state || 'active';
                 document.getElementById('state-value').textContent = data.state || 'active';
+                
+                // Get session info for sentiment
+                try {
+                    const sessRes = await fetch(API + `/admin/sessions?user_id=${userId}`);
+                    const sessData = await sessRes.json();
+                    if (sessData.sessions && sessData.sessions.length > 0) {
+                        const session = sessData.sessions[0]; // Most recent
+                        currentSessionId = session.id;
+                        sentimentEnabled = session.sentiment_enabled;
+                        document.getElementById('sentiment-toggle').checked = sentimentEnabled;
+                        document.getElementById('sentiment-stats').style.display = sentimentEnabled ? 'block' : 'none';
+                        if (sentimentEnabled) {
+                            loadSentimentData();
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to load session:', e);
+                }
                 
                 const messagesDiv = document.getElementById('messages');
                 messagesDiv.innerHTML = data.messages.map(m => `
@@ -359,7 +560,6 @@
         }
 
         loadConversation();
-        setInterval(loadConversation, 5000);
     </script>
 </body>
 </html>
